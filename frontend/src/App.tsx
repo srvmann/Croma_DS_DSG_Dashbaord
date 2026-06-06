@@ -12,6 +12,8 @@ import {
 } from './components/ui/select'
 import UploadScreen from './components/UploadScreen'
 import ExecutiveOverview from './components/tabs/ExecutiveOverview'
+import MonthlyRevenue from './components/tabs/MonthlyRevenue'
+import StoreJourneyMap from './components/tabs/StoreJourneyMap'
 import { cn } from './lib/utils'
 
 // ── Tab registry ──────────────────────────────────────────────────────────────
@@ -346,7 +348,11 @@ export default function App() {
           >
             {activeTab === 'executive'
               ? <ExecutiveOverview filters={filters} />
-              : <TabPlaceholder label={currentTab.label} filters={filters} />
+              : activeTab === 'monthly-revenue'
+                ? <MonthlyRevenue filters={filters} />
+                : activeTab === 'store-journey'
+                  ? <StoreJourneyMap filters={filters} />
+                  : <TabPlaceholder label={currentTab.label} filters={filters} />
             }
           </motion.div>
         </AnimatePresence>
