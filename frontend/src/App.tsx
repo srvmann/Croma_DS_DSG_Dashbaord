@@ -16,7 +16,6 @@ import ExecutiveOverview from './components/tabs/ExecutiveOverview'
 import MonthlyRevenue from './components/tabs/MonthlyRevenue'
 import StoreJourneyMap from './components/tabs/StoreJourneyMap'
 import GeoAnalytics from './components/tabs/GeoAnalytics'
-import StateAnalytics from './components/tabs/StateAnalytics'
 import RisingStars from './components/tabs/RisingStars'
 import FallenStars from './components/tabs/FallenStars'
 import RevenueMovers from './components/tabs/RevenueMovers'
@@ -31,7 +30,6 @@ const TABS = [
   { id: 'monthly-revenue', label: 'Monthly Revenue' },
   { id: 'store-journey',   label: 'Store Journey Map' },
   { id: 'geo',             label: 'Geo Analytics' },
-  { id: 'state',           label: 'State Analytics' },
   { id: 'rising-stars',    label: 'Rising Stars' },
   { id: 'fallen-stars',    label: 'Fallen Stars' },
   { id: 'revenue-movers',  label: 'Revenue Movers' },
@@ -219,7 +217,13 @@ export default function App() {
   const { isLoading, hasData, stores, months, states, categories, refetchData } =
     useDataContext()
 
-  const [activeTab, setActiveTab] = useState<TabId>('executive')
+  const [activeTab, setActiveTab]         = useState<TabId>('executive')
+  const [deepDiveStoreId, setDeepDiveStoreId] = useState<string | null>(null)
+
+  const handleNavigateToStore = useCallback((storeId: string) => {
+    setDeepDiveStoreId(storeId)
+    setActiveTab('store-deep-dive')
+  }, [])
 
   // Show skeleton for at least 400 ms to prevent content flash on fast loads
   const [skeletonDone, setSkeletonDone] = useState(false)
@@ -350,22 +354,20 @@ export default function App() {
               : activeTab === 'monthly-revenue'
                 ? <MonthlyRevenue filters={filters} />
                 : activeTab === 'store-journey'
-                  ? <StoreJourneyMap filters={filters} />
+                  ? <StoreJourneyMap filters={filters} onNavigateToStore={handleNavigateToStore} />
                   : activeTab === 'geo'
                     ? <GeoAnalytics filters={filters} />
-                    : activeTab === 'state'
-                      ? <StateAnalytics filters={filters} />
-                      : activeTab === 'rising-stars'
-                        ? <RisingStars filters={filters} />
-                        : activeTab === 'fallen-stars'
-                          ? <FallenStars filters={filters} />
-                          : activeTab === 'revenue-movers'
-                            ? <RevenueMovers filters={filters} />
-                            : activeTab === 'store-deep-dive'
-                              ? <StoreDeepDive filters={filters} />
-                              : activeTab === 'target-command'
-                                ? <TargetCommandCenter filters={filters} />
-                                : <TabPlaceholder label={currentTab.label} filters={filters} />
+                    : activeTab === 'rising-stars'
+                      ? <RisingStars filters={filters} />
+                      : activeTab === 'fallen-stars'
+                        ? <FallenStars filters={filters} />
+                        : activeTab === 'revenue-movers'
+                          ? <RevenueMovers filters={filters} />
+                          : activeTab === 'store-deep-dive'
+                            ? <StoreDeepDive filters={filters} initialStoreId={deepDiveStoreId} />
+                            : activeTab === 'target-command'
+                              ? <TargetCommandCenter filters={filters} />
+                              : <TabPlaceholder label={currentTab.label} filters={filters} />
             }
           </motion.div>
         </AnimatePresence>

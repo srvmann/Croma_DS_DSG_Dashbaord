@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   motion,
   useMotionValue,
@@ -191,13 +191,22 @@ function MiniBar({ ratio, color }: { ratio: number; color: string }) {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-interface Props { filters: FilterState }
+interface Props {
+  filters: FilterState
+  onNavigateToStore?: (storeId: string) => void
+}
 
-export default function StoreJourneyMap({ filters }: Props) {
+export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
   const { stores, months } = useDataContext()
   const [activeJourney, setActiveJourney] = useState<Journey | null>(null)
   const [sortKey, setSortKey]             = useState<SortKey>('revenue')
   const [sortDir, setSortDir]             = useState<'asc' | 'desc'>('desc')
+  const [hintStoreId, setHintStoreId] = useState<string | null>(null)
+
+  const lastClickedStoreRef = useRef<string | null>(null)
+  const hintTimerRef        = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => { if (hintTimerRef.current) clearTimeout(hintTimerRef.current) }, [])
 
   // ── Filter + split ─────────────────────────────────────────────────────────
   const { fs, fm, early, recent } = useMemo(() => {
@@ -237,6 +246,42 @@ export default function StoreJourneyMap({ filters }: Props) {
     })
   }, [fs, fm, early, recent])
 
+  // ── Click-to-select → click-again-to-navigate (pure Plotly onClick, no DOM tricks) ─
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handlePlotClick = useCallback((event: any) => {
+    const pt = event?.points?.[0]
+    if (!pt || !onNavigateToStore) return
+
+    // Try customdata first; if absent, resolve via curveNumber + pointIndex
+    let storeId = pt.customdata as string | undefined
+    if (!storeId) {
+      const curveNum = pt.curveNumber as number
+      if (curveNum === 0) return                       // reference line
+      const journey = JOURNEY_ORDER[curveNum - 1]
+      if (!journey) return
+      const group = classified.filter(c => c.journey === journey)
+      storeId     = group[pt.pointIndex as number]?.store?.store_id
+    }
+    if (!storeId) return
+
+    if (lastClickedStoreRef.current === storeId) {
+      // Second click on the same bubble → navigate
+      onNavigateToStore(storeId)
+      lastClickedStoreRef.current = null
+      setHintStoreId(null)
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
+    } else {
+      // First click → select and show banner; 5 s window to click again
+      lastClickedStoreRef.current = storeId
+      setHintStoreId(storeId)
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current)
+      hintTimerRef.current = setTimeout(() => {
+        lastClickedStoreRef.current = null
+        setHintStoreId(null)
+      }, 5000)
+    }
+  }, [classified, onNavigateToStore])
+
   // ── Summary counts ─────────────────────────────────────────────────────────
   const counts = useMemo(() => {
     const c: Record<Journey, number> = {
@@ -275,8 +320,9 @@ export default function StoreJourneyMap({ filters }: Props) {
         type: 'scatter' as const,
         mode: 'markers' as const,
         name: j,
-        x:    group.map(c => c.earlyAvg),
-        y:    group.map(c => c.recentAvg),
+        x:          group.map(c => c.earlyAvg),
+        y:          group.map(c => c.recentAvg),
+        customdata: group.map(c => c.store.store_id),
         text: group.map(c =>
           `${c.store.store_name ?? c.store.store_id}`
           + `<br>${c.store.state ?? ''}${c.store.category ? ` · ${c.store.category}` : ''}`
@@ -289,7 +335,9 @@ export default function StoreJourneyMap({ filters }: Props) {
           line:    { color: '#ffffff', width: 1 },
         },
         hovertemplate:
-          '<b>%{text}</b><br>Early avg: ₹%{x:,.0f}<br>Recent avg: ₹%{y:,.0f}<extra></extra>',
+          '<b>%{text}</b><br>Early avg: ₹%{x:,.0f}<br>Recent avg: ₹%{y:,.0f}'
+          + (onNavigateToStore ? '<br><i style="color:#6b7280">Click once · click again → Deep Dive</i>' : '')
+          + '<extra></extra>',
       }
     })
 
@@ -414,48 +462,76 @@ export default function StoreJourneyMap({ filters }: Props) {
 
       {/* ── Scatter Plot ── */}
       <motion.div {...panelSpring(0.12)} className={cardCls}>
-        <h3 className="mb-0.5 text-sm font-semibold text-gray-800">Store Journey Scatter</h3>
-        <p className="mb-3 text-[11px] text-gray-500">
-          X = early period avg revenue · Y = recent period avg revenue ·
-          bubble size = total revenue · dashed line = no change
-        </p>
+        <div className="flex items-start justify-between gap-2 flex-wrap mb-3">
+          <div>
+            <h3 className="mb-0.5 text-sm font-semibold text-gray-800">Store Journey Scatter</h3>
+            <p className="text-[11px] text-gray-500">
+              X = early period avg revenue · Y = recent period avg revenue ·
+              bubble size = total revenue · dashed line = no change
+            </p>
+          </div>
+          {onNavigateToStore && (
+            <span className="text-[11px] text-blue-500 bg-blue-50 border border-blue-100 rounded-full px-2.5 py-1 whitespace-nowrap shrink-0">
+              Click bubble once · click again → Deep Dive
+            </span>
+          )}
+        </div>
+
         {scatterTraces.length > 0 ? (
-          <Plot
-            data={scatterTraces}
-            layout={{
-              paper_bgcolor: 'rgba(0,0,0,0)',
-              plot_bgcolor:  'rgba(0,0,0,0)',
-              font:   { color: PT.font, family: 'Inter, sans-serif', size: 11 },
-              legend: {
-                bgcolor: 'rgba(0,0,0,0)',
-                font:    { color: PT.font, size: 10 },
-                orientation: 'h' as const,
-                y: -0.18,
-              },
-              xaxis: {
-                gridcolor:  PT.grid,
-                linecolor:  PT.line,
-                tickcolor:  PT.line,
-                automargin: true,
-                title:      { text: 'Early Period Avg Revenue (₹)' },
-                tickformat: ',.0f',
-              },
-              yaxis: {
-                gridcolor:  PT.grid,
-                linecolor:  PT.line,
-                tickcolor:  PT.line,
-                automargin: true,
-                title:      { text: 'Recent Period Avg Revenue (₹)' },
-                tickformat: ',.0f',
-              },
-              hovermode:  'closest' as const,
-              margin:     { l: 80, r: 20, t: 8, b: 90 },
-              height:     440,
-              uirevision: 'constant',
-            }}
-            config={{ displayModeBar: false, responsive: true }}
-            style={{ width: '100%' }}
-          />
+          <>
+            <Plot
+                data={scatterTraces}
+                layout={{
+                  paper_bgcolor: 'rgba(0,0,0,0)',
+                  plot_bgcolor:  'rgba(0,0,0,0)',
+                  font:   { color: PT.font, family: 'Inter, sans-serif', size: 11 },
+                  legend: {
+                    bgcolor: 'rgba(0,0,0,0)',
+                    font:    { color: PT.font, size: 10 },
+                    orientation: 'h' as const,
+                    y: -0.18,
+                  },
+                  xaxis: {
+                    gridcolor:  PT.grid,
+                    linecolor:  PT.line,
+                    tickcolor:  PT.line,
+                    automargin: true,
+                    title:      { text: 'Early Period Avg Revenue (₹)' },
+                    tickformat: ',.0f',
+                  },
+                  yaxis: {
+                    gridcolor:  PT.grid,
+                    linecolor:  PT.line,
+                    tickcolor:  PT.line,
+                    automargin: true,
+                    title:      { text: 'Recent Period Avg Revenue (₹)' },
+                    tickformat: ',.0f',
+                  },
+                  hovermode:  'closest' as const,
+                  margin:     { l: 80, r: 20, t: 8, b: 90 },
+                  height:     440,
+                  uirevision: 'constant',
+                }}
+                config={{ displayModeBar: false, responsive: true }}
+                style={{ width: '100%', cursor: onNavigateToStore ? 'pointer' : 'default' }}
+                onClick={handlePlotClick}
+              />
+
+            {/* Selection feedback banner */}
+            <motion.div
+              initial={false}
+              animate={{ opacity: hintStoreId ? 1 : 0, y: hintStoreId ? 0 : 4 }}
+              transition={{ duration: 0.15 }}
+              className="mt-2 flex items-center gap-2 text-[11px] text-blue-600 bg-blue-50 border border-blue-100 rounded-lg px-3 py-1.5"
+              style={{ pointerEvents: 'none' }}
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse shrink-0" />
+              <span>
+                <span className="font-semibold">{hintStoreId}</span>
+                {hintStoreId && ' selected — click this bubble again to open in Store Deep Dive →'}
+              </span>
+            </motion.div>
+          </>
         ) : (
           <div className={emptyMsg}>Not enough data to render scatter plot</div>
         )}
