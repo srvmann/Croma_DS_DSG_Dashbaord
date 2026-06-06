@@ -1,173 +1,346 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import Header from './components/Header'
-import UploadSection from './components/UploadSection'
-import SheetSelector from './components/SheetSelector'
-import KPICards from './components/KPICards'
-import ChartPanel from './components/ChartPanel'
-import DataTable from './components/DataTable'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs'
-import { uploadFile, getSheetData, getAnalysis } from './lib/api'
+import { Database, Moon, RotateCcw, Sun } from 'lucide-react'
+import { getDashboardData } from './lib/api'
+import { useFilters, type FilterState } from './hooks/useFilters'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from './components/ui/select'
+import { cn } from './lib/utils'
 
-type AnalysisData = Awaited<ReturnType<typeof getAnalysis>>['data']
-type SheetData = Awaited<ReturnType<typeof getSheetData>>['data']
+// ── Tab registry ──────────────────────────────────────────────────────────────
 
-export default function App() {
-  const [filename, setFilename] = useState<string | null>(null)
-  const [sheets, setSheets] = useState<string[]>([])
-  const [selectedSheet, setSelectedSheet] = useState<string | null>(null)
-  const [analysis, setAnalysis] = useState<AnalysisData | null>(null)
-  const [sheetData, setSheetData] = useState<SheetData | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+const TABS = [
+  { id: 'executive',        label: 'Executive Overview' },
+  { id: 'monthly-revenue',  label: 'Monthly Revenue' },
+  { id: 'store-journey',    label: 'Store Journey Map' },
+  { id: 'geo',              label: 'Geo Analytics' },
+  { id: 'state',            label: 'State Analytics' },
+  { id: 'rising-stars',     label: 'Rising Stars' },
+  { id: 'fallen-stars',     label: 'Fallen Stars' },
+  { id: 'revenue-movers',   label: 'Revenue Movers' },
+  { id: 'store-deep-dive',  label: 'Store Deep Dive' },
+  { id: 'target-command',   label: 'Target Command Center' },
+] as const
 
-  const handleUpload = useCallback(async (file: File) => {
-    setIsLoading(true)
-    setError(null)
-    try {
-      const res = await uploadFile(file)
-      setFilename(res.data.filename)
-      setSheets(res.data.sheets)
-      setSelectedSheet(null)
-      setAnalysis(null)
-      setSheetData(null)
-    } catch {
-      setError('Upload failed. Check the file format and try again.')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [])
+type TabId = typeof TABS[number]['id']
 
-  const handleSheetSelect = useCallback(async (sheet: string) => {
-    setIsLoading(true)
-    setError(null)
-    setSelectedSheet(sheet)
-    setAnalysis(null)
-    setSheetData(null)
-    try {
-      const [analysisRes, dataRes] = await Promise.all([getAnalysis(sheet), getSheetData(sheet)])
-      setAnalysis(analysisRes.data)
-      setSheetData(dataRes.data)
-    } catch {
-      setError('Failed to load sheet data. The sheet may be empty or malformed.')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [])
+// ── Dashboard metadata (populated from /api/data) ────────────────────────────
 
-  const handleReset = () => {
-    setFilename(null)
-    setSheets([])
-    setSelectedSheet(null)
-    setAnalysis(null)
-    setSheetData(null)
-    setError(null)
+interface DashboardMeta {
+  storeCount: number
+  months: string[]
+  states: string[]
+  categories: string[]
+}
+
+// ── Radix Select requires non-empty values; use sentinel for "all" ────────────
+
+const ALL = '__all__'
+const toSel = (v: string) => v || ALL
+const fromSel = (v: string) => (v === ALL ? '' : v)
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+function DataStatusChip({ meta }: { meta: DashboardMeta | null }) {
+  if (!meta || meta.storeCount === 0) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+        <span className="h-1.5 w-1.5 rounded-full bg-gray-400 dark:bg-gray-600" />
+        No Data
+      </span>
+    )
   }
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium bg-emerald-50 dark:bg-emerald-900/25 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/50">
+      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+      {meta.storeCount} store{meta.storeCount !== 1 ? 's' : ''} &middot; {meta.months.length} month{meta.months.length !== 1 ? 's' : ''} loaded
+    </span>
+  )
+}
+
+function FilterBar({
+  meta,
+  filters,
+  onFilterChange,
+  onReset,
+  activeCount,
+}: {
+  meta: DashboardMeta | null
+  filters: FilterState
+  onFilterChange: (key: keyof FilterState, value: string) => void
+  onReset: () => void
+  activeCount: number
+}) {
+  const months = meta?.months ?? []
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100">
-      <Header />
+    <div className="flex items-center gap-2 flex-wrap">
+      {/* State */}
+      <Select
+        value={toSel(filters.state)}
+        onValueChange={v => onFilterChange('state', fromSel(v))}
+      >
+        <SelectTrigger className="h-8 w-36 text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL}>All States</SelectItem>
+          {(meta?.states ?? []).map(s => (
+            <SelectItem key={s} value={s}>{s}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
 
-      <main className="container mx-auto max-w-7xl px-4 py-8">
+      {/* Category */}
+      <Select
+        value={toSel(filters.category)}
+        onValueChange={v => onFilterChange('category', fromSel(v))}
+      >
+        <SelectTrigger className="h-8 w-40 text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL}>All Categories</SelectItem>
+          {(meta?.categories ?? []).map(c => (
+            <SelectItem key={c} value={c}>{c}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      {/* From Month */}
+      <div className="flex items-center gap-1.5">
+        <span className="text-xs text-gray-500 dark:text-gray-400 select-none">From</span>
+        <Select
+          value={toSel(filters.fromMonth)}
+          onValueChange={v => onFilterChange('fromMonth', fromSel(v))}
+        >
+          <SelectTrigger className="h-8 w-32 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>Earliest</SelectItem>
+            {months.map(m => (
+              <SelectItem key={m} value={m}>{m}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* To Month */}
+      <div className="flex items-center gap-1.5">
+        <span className="text-xs text-gray-500 dark:text-gray-400 select-none">To</span>
+        <Select
+          value={toSel(filters.toMonth)}
+          onValueChange={v => onFilterChange('toMonth', fromSel(v))}
+        >
+          <SelectTrigger className="h-8 w-32 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>Latest</SelectItem>
+            {months.map(m => (
+              <SelectItem key={m} value={m}>{m}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Reset + active filter count badge */}
+      <button
+        onClick={onReset}
+        disabled={activeCount === 0}
+        className={cn(
+          'inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium transition-colors',
+          activeCount > 0
+            ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20'
+            : 'text-gray-400 dark:text-gray-600 cursor-default'
+        )}
+      >
+        <RotateCcw className="h-3 w-3" />
+        Reset
+        {activeCount > 0 && (
+          <span className="ml-0.5 inline-flex items-center justify-center h-4 w-4 rounded-full bg-blue-500 text-white text-[10px] font-bold leading-none">
+            {activeCount}
+          </span>
+        )}
+      </button>
+    </div>
+  )
+}
+
+function TabPlaceholder({ label, filters }: { label: string; filters: FilterState }) {
+  const active = Object.entries(filters).filter(([, v]) => Boolean(v))
+  return (
+    <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/50 min-h-[420px] flex flex-col items-center justify-center gap-4 p-8">
+      <div className="h-14 w-14 rounded-2xl bg-gradient-to-br from-blue-500/15 to-cyan-400/15 dark:from-blue-500/20 dark:to-cyan-400/20 flex items-center justify-center">
+        <Database className="h-6 w-6 text-blue-500 dark:text-blue-400" />
+      </div>
+      <div className="text-center">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{label}</h3>
+        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400 max-w-xs">
+          Upload sales data to populate this view.
+        </p>
+      </div>
+      {active.length > 0 && (
+        <div className="flex flex-wrap justify-center gap-1.5 mt-1">
+          {active.map(([k, v]) => (
+            <span
+              key={k}
+              className="inline-flex items-center rounded-full px-2 py-0.5 text-xs bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-500/20"
+            >
+              {k}: {v}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+
+export default function App() {
+  const [isDark, setIsDark] = useState(true)
+  const [activeTab, setActiveTab] = useState<TabId>('executive')
+  const [meta, setMeta] = useState<DashboardMeta | null>(null)
+
+  const { getFilters, setFilter, resetFilters, getActiveCount } = useFilters()
+
+  // Sync dark mode class to <html> so Radix portals also get dark styles
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', isDark)
+  }, [isDark])
+
+  // Bootstrap dark mode before first paint
+  useEffect(() => {
+    document.documentElement.classList.add('dark')
+    getDashboardData()
+      .then(({ data }) => {
+        if (!data.no_data) {
+          setMeta({
+            storeCount: data.stores.length,
+            months: data.months,
+            states: data.states,
+            categories: data.categories,
+          })
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  const filters = getFilters(activeTab)
+  const activeCount = getActiveCount(activeTab)
+
+  const handleFilterChange = useCallback(
+    (key: keyof FilterState, value: string) => setFilter(activeTab, key, value),
+    [activeTab, setFilter]
+  )
+
+  const handleReset = useCallback(
+    () => resetFilters(activeTab),
+    [activeTab, resetFilters]
+  )
+
+  const currentTab = TABS.find(t => t.id === activeTab)!
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 transition-colors duration-200">
+
+      {/* ── Top Nav ─────────────────────────────────────────────────────────── */}
+      <header className="sticky top-0 z-50 h-16 border-b border-gray-200 dark:border-gray-800 bg-white/95 dark:bg-gray-950/95 backdrop-blur-sm">
+        <div className="flex items-center justify-between h-full px-4 max-w-screen-2xl mx-auto gap-4">
+
+          {/* Logo + brand */}
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="shrink-0 inline-flex items-center justify-center px-3 h-8 rounded-full bg-gradient-to-r from-blue-600 to-cyan-400 text-white text-sm font-bold tracking-wide select-none shadow-sm">
+              SW
+            </span>
+            <div className="min-w-0">
+              <p className="text-base font-bold text-gray-900 dark:text-white leading-none truncate">
+                StoreWise
+              </p>
+              <p className="text-[10px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
+                Store Analytics Platform
+              </p>
+            </div>
+          </div>
+
+          {/* Right: data status + dark/light toggle */}
+          <div className="flex items-center gap-3 shrink-0">
+            <DataStatusChip meta={meta} />
+            <button
+              onClick={() => setIsDark(d => !d)}
+              aria-label="Toggle dark mode"
+              className="flex items-center justify-center h-8 w-8 rounded-md text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            >
+              {isDark
+                ? <Sun className="h-4 w-4" />
+                : <Moon className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* ── Tab Bar (sticky below nav, top-16 = 64px) ───────────────────────── */}
+      <div className="sticky top-16 z-40 border-b border-gray-200 dark:border-gray-800 bg-white/95 dark:bg-gray-950/95 backdrop-blur-sm overflow-x-auto scrollbar-hide">
+        <div className="flex items-center h-12 px-4 gap-0.5 min-w-max max-w-screen-2xl mx-auto">
+          {TABS.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                'relative px-3 py-1.5 text-sm font-medium rounded-md whitespace-nowrap transition-colors',
+                activeTab === tab.id
+                  ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10'
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800/60'
+              )}
+            >
+              {tab.label}
+              {activeTab === tab.id && (
+                <motion.span
+                  layoutId="tab-underline"
+                  className="absolute inset-x-0 -bottom-[1px] h-0.5 bg-blue-500 dark:bg-blue-400 rounded-t"
+                  transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                />
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Filter Bar (sticky below tab bar, top-28 = 112px = 64+48) ───────── */}
+      <div className="sticky top-28 z-30 border-b border-gray-200 dark:border-gray-800 bg-white/90 dark:bg-gray-950/90 backdrop-blur-sm">
+        <div className="px-4 py-2 max-w-screen-2xl mx-auto">
+          <FilterBar
+            meta={meta}
+            filters={filters}
+            onFilterChange={handleFilterChange}
+            onReset={handleReset}
+            activeCount={activeCount}
+          />
+        </div>
+      </div>
+
+      {/* ── Tab Content ───────────────────────────────────────────────────────── */}
+      <main className="px-4 py-6 max-w-screen-2xl mx-auto">
         <AnimatePresence mode="wait">
-          {!filename ? (
-            <motion.div
-              key="upload"
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -16 }}
-              transition={{ duration: 0.25 }}
-            >
-              <UploadSection onUpload={handleUpload} isLoading={isLoading} />
-            </motion.div>
-          ) : (
-            <motion.div
-              key="dashboard"
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -16 }}
-              transition={{ duration: 0.25 }}
-              className="space-y-6"
-            >
-              {/* File bar */}
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-lg font-semibold text-white">{filename}</h2>
-                  <p className="text-sm text-gray-500">
-                    {sheets.length} sheet{sheets.length !== 1 ? 's' : ''} detected
-                  </p>
-                </div>
-                <button
-                  onClick={handleReset}
-                  className="shrink-0 text-sm text-gray-500 transition-colors hover:text-gray-300"
-                >
-                  Upload different file
-                </button>
-              </div>
-
-              <SheetSelector
-                sheets={sheets}
-                selected={selectedSheet}
-                onSelect={handleSheetSelect}
-                isLoading={isLoading}
-              />
-
-              {error && (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="rounded-lg border border-red-800 bg-red-900/20 px-4 py-3 text-sm text-red-400"
-                >
-                  {error}
-                </motion.div>
-              )}
-
-              {isLoading && (
-                <div className="flex justify-center py-16">
-                  <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-700 border-t-blue-500" />
-                </div>
-              )}
-
-              <AnimatePresence mode="wait">
-                {analysis && sheetData && !isLoading && (
-                  <motion.div
-                    key={selectedSheet}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="space-y-6"
-                  >
-                    <KPICards kpis={analysis.kpis} shape={analysis.shape} />
-
-                    <Tabs defaultValue="charts">
-                      <TabsList>
-                        <TabsTrigger value="charts">Charts</TabsTrigger>
-                        <TabsTrigger value="table">Data Table</TabsTrigger>
-                      </TabsList>
-                      <TabsContent value="charts" className="mt-4">
-                        <ChartPanel
-                          barCharts={analysis.bar_charts}
-                          distributions={analysis.distributions}
-                        />
-                      </TabsContent>
-                      <TabsContent value="table" className="mt-4">
-                        <DataTable columns={sheetData.columns} rows={sheetData.rows} />
-                      </TabsContent>
-                    </Tabs>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {!isLoading && !selectedSheet && (
-                <div className="flex justify-center py-12 text-sm text-gray-600">
-                  Select a sheet above to begin analysis
-                </div>
-              )}
-            </motion.div>
-          )}
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+          >
+            <TabPlaceholder label={currentTab.label} filters={filters} />
+          </motion.div>
         </AnimatePresence>
       </main>
+
     </div>
   )
 }

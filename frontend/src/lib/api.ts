@@ -4,6 +4,27 @@ const api = axios.create({
   baseURL: (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:8000',
 })
 
+export interface StoreRecord {
+  store_id: string
+  store_name?: string
+  state?: string
+  category?: string
+  monthly_sales: Record<string, number>
+  target?: number | null
+}
+
+export interface DashboardData {
+  no_data: boolean
+  stores: StoreRecord[]
+  months: string[]
+  states: string[]
+  categories: string[]
+  has_targets: boolean
+  warnings: string[]
+}
+
+export const getDashboardData = () => api.get<DashboardData>('/api/data')
+
 export const uploadFile = (file: File) => {
   const form = new FormData()
   form.append('file', file)
