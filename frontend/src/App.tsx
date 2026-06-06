@@ -16,6 +16,9 @@ import MonthlyRevenue from './components/tabs/MonthlyRevenue'
 import StoreJourneyMap from './components/tabs/StoreJourneyMap'
 import GeoAnalytics from './components/tabs/GeoAnalytics'
 import StateAnalytics from './components/tabs/StateAnalytics'
+import RisingStars from './components/tabs/RisingStars'
+import FallenStars from './components/tabs/FallenStars'
+import RevenueMovers from './components/tabs/RevenueMovers'
 import { cn } from './lib/utils'
 
 // ── Tab registry ──────────────────────────────────────────────────────────────
@@ -358,7 +361,13 @@ export default function App() {
                     ? <GeoAnalytics filters={filters} />
                     : activeTab === 'state'
                       ? <StateAnalytics filters={filters} />
-                      : <TabPlaceholder label={currentTab.label} filters={filters} />
+                      : activeTab === 'rising-stars'
+                        ? <RisingStars filters={filters} />
+                        : activeTab === 'fallen-stars'
+                          ? <FallenStars filters={filters} />
+                          : activeTab === 'revenue-movers'
+                            ? <RevenueMovers filters={filters} />
+                            : <TabPlaceholder label={currentTab.label} filters={filters} />
             }
           </motion.div>
         </AnimatePresence>
