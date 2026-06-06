@@ -14,6 +14,8 @@ import UploadScreen from './components/UploadScreen'
 import ExecutiveOverview from './components/tabs/ExecutiveOverview'
 import MonthlyRevenue from './components/tabs/MonthlyRevenue'
 import StoreJourneyMap from './components/tabs/StoreJourneyMap'
+import GeoAnalytics from './components/tabs/GeoAnalytics'
+import StateAnalytics from './components/tabs/StateAnalytics'
 import { cn } from './lib/utils'
 
 // ── Tab registry ──────────────────────────────────────────────────────────────
@@ -352,7 +354,11 @@ export default function App() {
                 ? <MonthlyRevenue filters={filters} />
                 : activeTab === 'store-journey'
                   ? <StoreJourneyMap filters={filters} />
-                  : <TabPlaceholder label={currentTab.label} filters={filters} />
+                  : activeTab === 'geo'
+                    ? <GeoAnalytics filters={filters} />
+                    : activeTab === 'state'
+                      ? <StateAnalytics filters={filters} />
+                      : <TabPlaceholder label={currentTab.label} filters={filters} />
             }
           </motion.div>
         </AnimatePresence>
