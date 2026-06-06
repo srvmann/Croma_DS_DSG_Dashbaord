@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 interface Props {
   columns: string[]
@@ -18,20 +19,23 @@ export default function DataTable({ columns, rows }: Props) {
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="overflow-hidden rounded-xl border border-gray-800 bg-gray-900"
+      className="overflow-hidden rounded-xl border border-gray-800 bg-gray-900 table-sticky-head"
     >
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-gray-800 bg-gray-800/60">
-              <th className="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 w-12">
+            <tr
+              className="border-b border-gray-700"
+              style={{ backgroundColor: '#1e3a5f' }}
+            >
+              <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-300 w-12">
                 #
               </th>
               {columns.map((col) => (
                 <th
                   key={col}
                   title={col}
-                  className="max-w-[160px] truncate px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-400"
+                  className="max-w-[160px] truncate px-3 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-300"
                 >
                   {col}
                 </th>
@@ -42,7 +46,10 @@ export default function DataTable({ columns, rows }: Props) {
             {slice.map((row, i) => (
               <tr
                 key={i}
-                className="border-b border-gray-800/50 transition-colors hover:bg-gray-800/30"
+                className={cn(
+                  'border-b border-gray-800/50 transition-colors duration-100 hover:bg-blue-950/30',
+                  i % 2 === 1 ? 'bg-white/[0.02]' : '',
+                )}
               >
                 <td className="px-3 py-2.5 text-gray-600 tabular-nums">
                   {page * PAGE_SIZE + i + 1}

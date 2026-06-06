@@ -38,3 +38,29 @@
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
+
+/* ── Skeleton shimmer ─────────────────────────────────────────────────────── */
+@keyframes skeleton-shimmer {
+  0%   { background-position: -600px 0; }
+  100% { background-position:  600px 0; }
+}
+
+.skeleton-pulse {
+  background: linear-gradient(
+    90deg,
+    #1f2937 0%,
+    #2d3f55 40%,
+    #374151 50%,
+    #2d3f55 60%,
+    #1f2937 100%
+  );
+  background-size: 1200px 100%;
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+}
+
+/* ── Table sticky header ──────────────────────────────────────────────────── */
+.table-sticky-head thead {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}

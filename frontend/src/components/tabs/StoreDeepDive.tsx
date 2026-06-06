@@ -12,6 +12,7 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { InsightCard } from '@/components/InsightCard'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -216,28 +217,6 @@ function KPIPill({ label, value, valueClass }: { label: string; value: string; v
   )
 }
 
-// ── Insight Card ──────────────────────────────────────────────────────────────
-
-function InsightCard({ tag, tagCls, title, body, delay }: {
-  tag: string; tagCls: string; title: string; body: string; delay: number
-}) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay }}
-      className="rounded-xl border border-gray-800 bg-gray-900 p-5 flex flex-col gap-3"
-    >
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className={cn('text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full', tagCls)}>
-          {tag}
-        </span>
-        <span className="text-sm font-semibold text-gray-200">{title}</span>
-      </div>
-      <p className="text-sm text-gray-400 leading-relaxed">{body}</p>
-    </motion.div>
-  )
-}
 
 // ── Searchable Store Dropdown ─────────────────────────────────────────────────
 
@@ -834,25 +813,9 @@ export default function StoreDeepDive({ filters }: Props) {
 
       {/* ── Insight Cards ── */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <InsightCard
-          tag="Summary"
-          tagCls="bg-blue-500/15 text-blue-400"
-          title={selectedStore.store_name ?? selectedStore.store_id}
-          body={insight.summary}
-          delay={0.25}
-        />
-        <InsightCard
-          tag="Key Observation"
-          tagCls="bg-purple-500/15 text-purple-400"
-          title="Performance Highlights"
-          body={insight.observation}
-          delay={0.3}
-        />
-        <InsightCard
-          tag="Recommendation"
-          tagCls="bg-emerald-500/15 text-emerald-400"
-          title="Next Steps"
-          body={insight.recommendation}
+        <InsightCard variant="info"  tag="Summary"          title={selectedStore.store_name ?? selectedStore.store_id} body={insight.summary}        delay={0.25} />
+        <InsightCard variant="meta"  tag="Key Observation"  title="Performance Highlights"                             body={insight.observation}    delay={0.30} />
+        <InsightCard variant="good"  tag="Recommendation"   title="Next Steps"                                         body={insight.recommendation}
           delay={0.35}
         />
       </div>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Database, Moon, RotateCcw, Sun } from 'lucide-react'
 import { useDataContext } from './contexts/DataContext'
@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from './components/ui/select'
 import UploadScreen from './components/UploadScreen'
+import { AppSkeleton } from './components/Skeleton'
 import ExecutiveOverview from './components/tabs/ExecutiveOverview'
 import MonthlyRevenue from './components/tabs/MonthlyRevenue'
 import StoreJourneyMap from './components/tabs/StoreJourneyMap'
@@ -221,6 +222,16 @@ export default function App() {
   const [isDark, setIsDark] = useState(true)
   const [activeTab, setActiveTab] = useState<TabId>('executive')
 
+  // Show skeleton for at least 400 ms to prevent content flash on fast loads
+  const [skeletonDone, setSkeletonDone] = useState(false)
+  const skeletonTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (!isLoading) {
+      skeletonTimer.current = setTimeout(() => setSkeletonDone(true), 400)
+      return () => { if (skeletonTimer.current) clearTimeout(skeletonTimer.current) }
+    }
+  }, [isLoading])
+
   const { getFilters, setFilter, resetFilters, getActiveCount } = useFilters()
 
   // Keep <html class="dark"> in sync with toggle state
@@ -247,14 +258,10 @@ export default function App() {
 
   const currentTab = TABS.find(t => t.id === activeTab)!
 
-  // ── Loading spinner (initial server check) ────────────────────────────────
+  // ── Loading skeleton (initial server check + 400 ms min) ─────────────────
 
-  if (isLoading) {
-    return (
-      <div className="fixed inset-0 bg-[#080f20] flex items-center justify-center">
-        <div className="h-8 w-8 rounded-full border-2 border-white/10 border-t-blue-500 animate-spin" />
-      </div>
-    )
+  if (isLoading || !skeletonDone) {
+    return <AppSkeleton />
   }
 
   // ── Upload / onboarding screen ────────────────────────────────────────────
@@ -344,7 +351,7 @@ export default function App() {
       </div>
 
       {/* ── Tab Content ── */}
-      <main className="px-4 py-6 max-w-screen-2xl mx-auto">
+      <main className="px-4 py-6 pb-14 max-w-screen-2xl mx-auto">
         <AnimatePresence mode="wait">
           <motion.div
             key={activeTab}
@@ -378,6 +385,16 @@ export default function App() {
           </motion.div>
         </AnimatePresence>
       </main>
+
+      {/* ── Footer ── */}
+      <footer
+        className="fixed bottom-0 inset-x-0 z-20 h-10 flex items-center justify-center border-t border-white/5"
+        style={{ background: 'linear-gradient(90deg, #080f20 0%, #1e3a5f 50%, #080f20 100%)' }}
+      >
+        <span className="text-[11px] font-medium tracking-[0.18em] uppercase text-gray-500 select-none">
+          StoreWise Analytics Platform
+        </span>
+      </footer>
 
     </div>
   )
