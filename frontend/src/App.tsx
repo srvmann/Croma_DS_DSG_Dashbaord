@@ -20,6 +20,7 @@ import RisingStars from './components/tabs/RisingStars'
 import FallenStars from './components/tabs/FallenStars'
 import RevenueMovers from './components/tabs/RevenueMovers'
 import StoreDeepDive from './components/tabs/StoreDeepDive'
+import TargetCommandCenter from './components/tabs/TargetCommandCenter'
 import { cn } from './lib/utils'
 
 // ── Tab registry ──────────────────────────────────────────────────────────────
@@ -370,7 +371,9 @@ export default function App() {
                             ? <RevenueMovers filters={filters} />
                             : activeTab === 'store-deep-dive'
                               ? <StoreDeepDive filters={filters} />
-                              : <TabPlaceholder label={currentTab.label} filters={filters} />
+                              : activeTab === 'target-command'
+                                ? <TargetCommandCenter filters={filters} />
+                                : <TabPlaceholder label={currentTab.label} filters={filters} />
             }
           </motion.div>
         </AnimatePresence>
