@@ -25,6 +25,43 @@ export interface DashboardData {
 
 export const getDashboardData = () => api.get<DashboardData>('/api/data')
 
+export interface UploadSalesResult {
+  ok: boolean
+  stores: number
+  months: string[]
+}
+export interface UploadTargetsResult {
+  ok: boolean
+  stores: number
+}
+
+export const uploadSales = (
+  file: File,
+  onProgress?: (pct: number) => void,
+) => {
+  const form = new FormData()
+  form.append('file', file)
+  return api.post<UploadSalesResult>('/api/upload/sales', form, {
+    onUploadProgress: e =>
+      onProgress?.(Math.round((e.loaded * 100) / (e.total ?? 1))),
+  })
+}
+
+export const uploadTargets = (
+  file: File,
+  onProgress?: (pct: number) => void,
+) => {
+  const form = new FormData()
+  form.append('file', file)
+  return api.post<UploadTargetsResult>('/api/upload/targets', form, {
+    onUploadProgress: e =>
+      onProgress?.(Math.round((e.loaded * 100) / (e.total ?? 1))),
+  })
+}
+
+export const loadDemoData = () =>
+  api.post<UploadSalesResult>('/api/demo/load')
+
 export const uploadFile = (file: File) => {
   const form = new FormData()
   form.append('file', file)

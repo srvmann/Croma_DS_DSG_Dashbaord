@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from './components/ui/select'
+import UploadScreen from './components/UploadScreen'
 import { cn } from './lib/utils'
 
 // ── Tab registry ──────────────────────────────────────────────────────────────
@@ -204,10 +205,30 @@ function TabPlaceholder({ label, filters }: { label: string; filters: FilterStat
 
 // ── Main App ──────────────────────────────────────────────────────────────────
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+async function fetchMeta(): Promise<DashboardMeta | null> {
+  try {
+    const { data } = await getDashboardData()
+    if (data.no_data) return null
+    return {
+      storeCount: data.stores.length,
+      months: data.months,
+      states: data.states,
+      categories: data.categories,
+    }
+  } catch {
+    return null
+  }
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+
 export default function App() {
   const [isDark, setIsDark] = useState(true)
   const [activeTab, setActiveTab] = useState<TabId>('executive')
   const [meta, setMeta] = useState<DashboardMeta | null>(null)
+  const [isInitializing, setIsInitializing] = useState(true)
 
   const { getFilters, setFilter, resetFilters, getActiveCount } = useFilters()
 
@@ -216,21 +237,19 @@ export default function App() {
     document.documentElement.classList.toggle('dark', isDark)
   }, [isDark])
 
-  // Bootstrap dark mode before first paint
+  // Bootstrap: apply dark mode + check if data already exists on the server
   useEffect(() => {
     document.documentElement.classList.add('dark')
-    getDashboardData()
-      .then(({ data }) => {
-        if (!data.no_data) {
-          setMeta({
-            storeCount: data.stores.length,
-            months: data.months,
-            states: data.states,
-            categories: data.categories,
-          })
-        }
-      })
-      .catch(() => {})
+    fetchMeta().then(m => {
+      setMeta(m)
+      setIsInitializing(false)
+    })
+  }, [])
+
+  // Called by UploadScreen when the user has uploaded and clicked "Enter Dashboard"
+  const handleDashboardReady = useCallback(async () => {
+    const m = await fetchMeta()
+    setMeta(m)
   }, [])
 
   const filters = getFilters(activeTab)
@@ -247,6 +266,20 @@ export default function App() {
   )
 
   const currentTab = TABS.find(t => t.id === activeTab)!
+
+  // While checking server state, show a minimal dark spinner
+  if (isInitializing) {
+    return (
+      <div className="fixed inset-0 bg-[#080f20] flex items-center justify-center">
+        <div className="h-8 w-8 rounded-full border-2 border-white/10 border-t-blue-500 animate-spin" />
+      </div>
+    )
+  }
+
+  // No data on server yet → show upload/onboarding screen
+  if (!meta) {
+    return <UploadScreen onReady={handleDashboardReady} />
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 transition-colors duration-200">
