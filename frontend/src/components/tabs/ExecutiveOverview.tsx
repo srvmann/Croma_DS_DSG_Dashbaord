@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
-import { motion } from 'framer-motion'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  TrendingUp, TrendingDown, Minus,
-  Building2, Activity, BarChart2,
-  ChevronUp, ChevronDown,
-} from 'lucide-react'
+  motion,
+  useMotionValue,
+  useTransform,
+  animate,
+} from 'framer-motion'
+import { TrendingUp, TrendingDown, Users, Star, Moon } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import createPlotlyComponent from 'react-plotly.js/factory'
 // @ts-ignore — plotly.js-dist-min does not ship its own .d.ts
@@ -13,51 +14,64 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { InsightCard } from '@/components/InsightCard'
 
 const Plot = createPlotlyComponent(Plotly)
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type HealthTier = 'Healthy' | 'Recovering' | 'Declining' | 'Dormant' | 'Underperforming'
-type SortKey = 'name' | 'state' | 'category' | 'revenue' | 'growth'
+type EarlyTier      = 'Top Performer' | 'Mid-tier' | 'Low Tier'
+type RecentCategory = 'Consistent Performer' | 'Fallen Star' | 'Average' | 'Consistently Low' | 'Rising Star'
+type HealthStatus   = 'Healthy' | 'Recovering' | 'Declining' | 'Underperforming' | 'Dormant' | 'Stable'
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── Color palette ─────────────────────────────────────────────────────────────
 
-const STATE_PALETTE = [
-  '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6',
-  '#06b6d4', '#f97316', '#84cc16', '#ec4899',
-  '#14b8a6', '#a855f7', '#f43f5e', '#22d3ee',
-]
-
-const HEALTH_ORDER: HealthTier[] = [
-  'Healthy', 'Recovering', 'Declining', 'Dormant', 'Underperforming',
-]
-
-const HEALTH_HEX: Record<HealthTier, string> = {
-  Healthy: '#10b981',
-  Recovering: '#3b82f6',
-  Declining: '#f59e0b',
-  Dormant: '#f97316',
+const HEALTH_COLORS: Record<HealthStatus, string> = {
+  Healthy:         '#10b981',
+  Recovering:      '#0ea5e9',
+  Declining:       '#f59e0b',
   Underperforming: '#ef4444',
+  Dormant:         '#94a3b8',
+  Stable:          '#8b5cf6',
 }
 
-const HEALTH_BADGE: Record<HealthTier, string> = {
-  Healthy: 'bg-emerald-500/15 text-emerald-400',
-  Recovering: 'bg-blue-500/15 text-blue-400',
-  Declining: 'bg-amber-500/15 text-amber-400',
-  Dormant: 'bg-orange-500/15 text-orange-400',
-  Underperforming: 'bg-red-500/15 text-red-400',
+const EARLY_TIERS: EarlyTier[]      = ['Top Performer', 'Mid-tier', 'Low Tier']
+const RECENT_CATS: RecentCategory[] = [
+  'Consistent Performer', 'Fallen Star', 'Average', 'Consistently Low', 'Rising Star',
+]
+
+const EARLY_NODE_COLORS  = ['#0ea5e9', '#8b5cf6', '#94a3b8']
+const RECENT_NODE_COLORS = ['#10b981', '#ef4444', '#f59e0b', '#64748b', '#06b6d4']
+const SANKEY_LINK_COLORS = [
+  'rgba(14,165,233,0.20)',
+  'rgba(139,92,246,0.20)',
+  'rgba(148,163,184,0.20)',
+]
+
+// Fixed light-mode Plotly theme tokens
+const PT = { font: '#6b7280', grid: '#e5e7eb', line: '#d1d5db', nodeBorder: '#e5e7eb' }
+
+// ── Animation variants ────────────────────────────────────────────────────────
+
+const kpiContainer = {
+  hidden: {},
+  show:   { transition: { staggerChildren: 0.07, delayChildren: 0.05 } },
 }
 
-const PLOTLY_AXES = {
-  gridcolor: '#1f2937',
-  linecolor: '#374151',
-  tickcolor: '#374151',
-  automargin: true,
-} as const
+const kpiItem = {
+  hidden: { opacity: 0, y: 20, scale: 0.93 },
+  show:   {
+    opacity: 1, y: 0, scale: 1,
+    transition: { type: 'spring' as const, stiffness: 300, damping: 24 },
+  },
+}
 
-// ── Pure helpers ──────────────────────────────────────────────────────────────
+const panelSpring = (delay = 0) => ({
+  initial:    { opacity: 0, y: 28 },
+  animate:    { opacity: 1, y: 0 },
+  transition: { type: 'spring' as const, stiffness: 260, damping: 24, delay },
+})
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function halve(months: string[]): { early: string[]; recent: string[] } {
   const n = months.length
@@ -65,13 +79,17 @@ function halve(months: string[]): { early: string[]; recent: string[] } {
   if (n === 1) return { early: [], recent: months }
   const half = Math.floor(n / 2)
   return {
-    early: months.slice(0, half),
+    early:  months.slice(0, half),
     recent: n % 2 === 0 ? months.slice(half) : months.slice(half + 1),
   }
 }
 
+function winRev(store: StoreRecord, months: string[]): number {
+  return months.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
+}
+
 function fmtInr(n: number): string {
-  const abs = Math.abs(n)
+  const abs  = Math.abs(n)
   const sign = n < 0 ? '-' : ''
   if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)}Cr`
   if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)}L`
@@ -83,523 +101,468 @@ function fmtPct(n: number): string {
   return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
 }
 
-function winRev(store: StoreRecord, months: string[]): number {
-  return months.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
+function pctileOf(rev: number, sorted: number[]): number {
+  if (!sorted.length) return 0
+  return (sorted.filter(r => r <= rev).length / sorted.length) * 100
 }
 
-function mAvg(store: StoreRecord, months: string[]): number {
-  return months.length ? winRev(store, months) / months.length : 0
+function classifyEarlyTier(pct: number): EarlyTier {
+  if (pct >= 67) return 'Top Performer'
+  if (pct >= 33) return 'Mid-tier'
+  return 'Low Tier'
 }
 
-function growthPct(store: StoreRecord, early: string[], recent: string[]): number | null {
-  if (!early.length || !recent.length) return null
-  const e = mAvg(store, early)
-  return e === 0 ? null : (mAvg(store, recent) - e) / e * 100
+function classifyRecentCategory(
+  earlyTier: EarlyTier, recentPct: number, recentRev: number,
+): RecentCategory {
+  if (recentRev === 0) return 'Consistently Low'
+  const band = recentPct >= 67 ? 'Top' : recentPct >= 33 ? 'Mid' : 'Low'
+  if (earlyTier === 'Top Performer') {
+    if (band === 'Top') return 'Consistent Performer'
+    if (band === 'Low') return 'Fallen Star'
+    return 'Average'
+  }
+  if (earlyTier === 'Low Tier') {
+    if (band === 'Top') return 'Rising Star'
+    if (band === 'Low') return 'Consistently Low'
+    return 'Average'
+  }
+  if (band === 'Top') return 'Consistent Performer'
+  if (band === 'Low') return 'Consistently Low'
+  return 'Average'
 }
 
-function scoreStore(store: StoreRecord, wm: string[], early: string[], recent: string[]): number {
-  const revs = wm.map(m => store.monthly_sales[m] ?? 0)
-  const total = revs.reduce((s, r) => s + r, 0)
-  if (total === 0) return 0
-
-  // Trend: 0–50 pts
-  const e = mAvg(store, early)
-  const r = mAvg(store, recent)
-  const ratio = e === 0 ? 1 : r / e
-  const trend = Math.min(50, Math.max(0, 25 + (ratio - 1) * 50))
-
-  // Consistency: 0–30 pts
-  const mean = total / revs.length
-  const coV = mean === 0 ? 1 : Math.sqrt(revs.reduce((s, v) => s + (v - mean) ** 2, 0) / revs.length) / mean
-  const consistency = Math.max(0, 30 * (1 - Math.min(coV, 1)))
-
-  // Activity: 0–20 pts
-  const check = recent.length ? recent : wm
-  const activity = (check.filter(m => (store.monthly_sales[m] ?? 0) > 0).length / check.length) * 20
-
-  return trend + consistency + activity
+function classifyHealth(ePct: number, rPct: number, rRev: number): HealthStatus {
+  if (rRev === 0)           return 'Dormant'
+  const diff = rPct - ePct
+  if (rPct >= 67 && diff >= 0) return 'Healthy'
+  if (diff >= 20)           return 'Recovering'
+  if (diff <= -25)          return 'Declining'
+  if (rPct < 20)            return 'Underperforming'
+  return 'Stable'
 }
 
-function tier(score: number): HealthTier {
-  if (score >= 70) return 'Healthy'
-  if (score >= 50) return 'Recovering'
-  if (score >= 30) return 'Declining'
-  if (score >= 15) return 'Dormant'
-  return 'Underperforming'
+// ── AnimatedNumber ────────────────────────────────────────────────────────────
+
+function AnimatedNumber({ value, className }: { value: number; className?: string }) {
+  const mv      = useMotionValue(0)
+  const display = useTransform(mv, (v: number) => Math.round(v).toLocaleString())
+
+  useEffect(() => {
+    const ctrl = animate(mv, value, { duration: 1.1, ease: [0.22, 1, 0.36, 1] })
+    return () => ctrl.stop()
+  }, [mv, value])
+
+  return <motion.span className={className}>{display}</motion.span>
 }
 
-function trendTag(g: number | null): { label: string; cls: string; icon: 'up' | 'flat' | 'down' } {
-  if (g === null) return { label: 'N/A', cls: 'text-gray-500', icon: 'flat' }
-  if (g > 10) return { label: fmtPct(g), cls: 'text-emerald-400', icon: 'up' }
-  if (g >= -5) return { label: fmtPct(g), cls: 'text-blue-400', icon: 'flat' }
-  return { label: fmtPct(g), cls: 'text-red-400', icon: 'down' }
+// ── MiniBar ───────────────────────────────────────────────────────────────────
+
+function MiniBar({ ratio, color }: { ratio: number; color: string }) {
+  return (
+    <div className="h-[3px] w-full rounded-full bg-gray-100 overflow-hidden mt-1.5">
+      <motion.div
+        className="h-full rounded-full"
+        style={{ backgroundColor: color }}
+        initial={{ scaleX: 0, originX: 0 }}
+        animate={{ scaleX: Math.min(Math.max(ratio, 0), 1) }}
+        transition={{ duration: 1.1, ease: [0.22, 1, 0.36, 1], delay: 0.25 }}
+      />
+    </div>
+  )
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── KPI Card ──────────────────────────────────────────────────────────────────
 
 interface KPICardProps {
-  label: string
-  value: string
-  sub?: string
-  valueClass?: string
-  icon: React.ReactNode
-  delay?: number
+  label:     string
+  value:     number
+  sub:       string
+  icon:      React.ReactNode
+  barRatio?: number
+  barColor?: string
+  danger?:   boolean
 }
 
-function KPICard({ label, value, sub, valueClass, icon, delay = 0 }: KPICardProps) {
+function KPICard({ label, value, sub, icon, barRatio, barColor, danger }: KPICardProps) {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay }}
-      className="rounded-xl border border-gray-800 bg-gray-900 p-4 flex flex-col gap-1 min-w-0"
+      variants={kpiItem}
+      whileHover={{
+        scale: 1.035, y: -4,
+        transition: { type: 'spring', stiffness: 420, damping: 26 },
+      }}
+      whileTap={{ scale: 0.97, transition: { duration: 0.1 } }}
+      className={cn(
+        'rounded-xl border bg-white p-4 flex flex-col gap-0.5 min-w-0 cursor-default',
+        'shadow-sm hover:shadow-md transition-shadow duration-200',
+        danger ? 'border-red-200' : 'border-gray-200',
+      )}
     >
       <div className="flex items-center justify-between gap-2">
         <p className="text-[10px] font-medium uppercase tracking-widest text-gray-500 truncate">
           {label}
         </p>
-        <span className="shrink-0 text-gray-600">{icon}</span>
+        <motion.span
+          className={cn('shrink-0', danger ? 'text-red-400' : 'text-gray-400')}
+          animate={danger ? { rotate: [0, -8, 8, -4, 0] } : {}}
+          transition={{ duration: 0.5, delay: 0.6 }}
+        >
+          {icon}
+        </motion.span>
       </div>
-      <p className={cn('text-2xl font-bold text-white tabular-nums truncate', valueClass)}>
-        {value}
-      </p>
-      {sub && <p className="text-[11px] text-gray-500 truncate">{sub}</p>}
+
+      <AnimatedNumber
+        value={value}
+        className={cn(
+          'text-2xl font-bold tabular-nums block',
+          danger ? 'text-red-600' : 'text-gray-900',
+        )}
+      />
+
+      <p className="text-[11px] text-gray-500 truncate">{sub}</p>
+
+      {barRatio !== undefined && barColor && (
+        <MiniBar ratio={barRatio} color={barColor} />
+      )}
     </motion.div>
   )
 }
 
-
-// ── Main component ────────────────────────────────────────────────────────────
+// ── Main ──────────────────────────────────────────────────────────────────────
 
 interface Props { filters: FilterState }
 
 export default function ExecutiveOverview({ filters }: Props) {
   const { stores, months } = useDataContext()
-  const [sortKey, setSortKey] = useState<SortKey>('revenue')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
   // ── Filter + split ─────────────────────────────────────────────────────────
-  const { fs, fm, early, recent } = useMemo(() => {
+  const { fs, early, recent } = useMemo(() => {
     let fs = stores
-    if (filters.state) fs = fs.filter(s => s.state === filters.state)
+    if (filters.state)    fs = fs.filter(s => s.state    === filters.state)
     if (filters.category) fs = fs.filter(s => s.category === filters.category)
-
     let fm = months
     if (filters.fromMonth) {
-      const i = months.indexOf(filters.fromMonth)
-      if (i >= 0) fm = fm.slice(i)
+      const i = months.indexOf(filters.fromMonth); if (i >= 0) fm = fm.slice(i)
     }
     if (filters.toMonth) {
-      const i = months.indexOf(filters.toMonth)
-      if (i >= 0) fm = fm.slice(0, i + 1)
+      const i = months.indexOf(filters.toMonth); if (i >= 0) fm = fm.slice(0, i + 1)
     }
-
     const { early, recent } = halve(fm)
-    return { fs, fm, early, recent }
+    return { fs, early, recent }
   }, [stores, months, filters])
+
+  // ── Journey data ───────────────────────────────────────────────────────────
+  const journeys = useMemo(() => {
+    if (!fs.length || !early.length || !recent.length) return []
+    const eSorted = fs.map(s => winRev(s, early)).sort((a, b) => a - b)
+    const rSorted = fs.map(s => winRev(s, recent)).sort((a, b) => a - b)
+    return fs.map(store => {
+      const eRev = winRev(store, early)
+      const rRev = winRev(store, recent)
+      const ePct = pctileOf(eRev, eSorted)
+      const rPct = pctileOf(rRev, rSorted)
+      const earlyTier      = classifyEarlyTier(ePct)
+      const recentCategory = classifyRecentCategory(earlyTier, rPct, rRev)
+      const health         = classifyHealth(ePct, rPct, rRev)
+      return { store, eRev, rRev, ePct, rPct, earlyTier, recentCategory, health }
+    })
+  }, [fs, early, recent])
 
   // ── KPIs ───────────────────────────────────────────────────────────────────
   const kpis = useMemo(() => {
-    const n = fs.length
-    const active = fs.filter(s => winRev(s, fm) > 0).length
-    const totalRev = fs.reduce((s, st) => s + winRev(st, fm), 0)
-    const avgRev = n > 0 ? totalRev / n : 0
+    const scope    = journeys.length
+    const improved = journeys.filter(j => j.rPct > j.ePct).length
+    const declined = journeys.filter(j => j.rPct <= j.ePct).length
+    const rising   = journeys.filter(j => j.recentCategory === 'Rising Star').length
+    const fallen   = journeys.filter(j => j.recentCategory === 'Fallen Star').length
+    const dormant  = journeys.filter(j => j.rRev === 0).length
+    return { scope, improved, declined, rising, fallen, dormant }
+  }, [journeys])
 
-    const earlySum = fs.reduce((s, st) => s + mAvg(st, early), 0)
-    const recentSum = fs.reduce((s, st) => s + mAvg(st, recent), 0)
-    const revGrowth = early.length && earlySum > 0 ? (recentSum - earlySum) / earlySum * 100 : null
-
-    let growing = 0
-    let declining = 0
-    for (const st of fs) {
-      const g = growthPct(st, early, recent)
-      if (g === null) continue
-      if (g > 0) growing++
-      else if (g < 0) declining++
+  // ── Sankey ─────────────────────────────────────────────────────────────────
+  const sankeyTrace = useMemo(() => {
+    if (!journeys.length) return null
+    const labels = [...EARLY_TIERS, ...RECENT_CATS]
+    const colors = [...EARLY_NODE_COLORS, ...RECENT_NODE_COLORS]
+    const flowMap: Record<string, number> = {}
+    for (const j of journeys) {
+      const key = `${EARLY_TIERS.indexOf(j.earlyTier)}_${
+        EARLY_TIERS.length + RECENT_CATS.indexOf(j.recentCategory)}`
+      flowMap[key] = (flowMap[key] ?? 0) + 1
     }
-
-    return { n, active, totalRev, avgRev, revGrowth, growing, declining }
-  }, [fs, fm, early, recent])
-
-  // ── State revenue trend lines ──────────────────────────────────────────────
-  const trendTraces = useMemo(() => {
-    const byState: Record<string, Record<string, number>> = {}
-    for (const store of fs) {
-      const state = store.state ?? 'Unknown'
-      if (!byState[state]) byState[state] = {}
-      for (const m of fm) {
-        byState[state][m] = (byState[state][m] ?? 0) + (store.monthly_sales[m] ?? 0)
-      }
+    const sources: number[] = [], targets: number[] = []
+    const values: number[]  = [], linkColors: string[] = []
+    for (const [k, v] of Object.entries(flowMap)) {
+      const [s, t] = k.split('_').map(Number)
+      sources.push(s); targets.push(t); values.push(v)
+      linkColors.push(SANKEY_LINK_COLORS[s % SANKEY_LINK_COLORS.length])
     }
-    return Object.entries(byState).map(([state, revByM], i) => ({
-      type: 'scatter' as const,
-      mode: 'lines' as const,
-      name: state,
-      x: fm,
-      y: fm.map(m => revByM[m] ?? 0),
-      line: {
-        shape: 'spline' as const,
-        smoothing: 1.2,
-        width: 2.5,
-        color: STATE_PALETTE[i % STATE_PALETTE.length],
-      },
-      hovertemplate: `<b>${state}</b><br>%{x}<br>₹%{y:,.0f}<extra></extra>`,
-    }))
-  }, [fs, fm])
+    return { labels, colors, sources, targets, values, linkColors }
+  }, [journeys])
 
-  // ── Health counts ──────────────────────────────────────────────────────────
-  const healthCounts = useMemo(() => {
-    const c: Record<HealthTier, number> = {
-      Healthy: 0, Recovering: 0, Declining: 0, Dormant: 0, Underperforming: 0,
+  // ── Donut ──────────────────────────────────────────────────────────────────
+  const donutCounts = useMemo(() => {
+    const c: Record<HealthStatus, number> = {
+      Healthy: 0, Recovering: 0, Declining: 0, Underperforming: 0, Dormant: 0, Stable: 0,
     }
-    for (const store of fs) c[tier(scoreStore(store, fm, early, recent))]++
+    for (const j of journeys) c[j.health]++
     return c
-  }, [fs, fm, early, recent])
+  }, [journeys])
 
-  // ── Top 10 stores ──────────────────────────────────────────────────────────
-  const tableRows = useMemo(() => {
-    const rows = fs.map(store => ({
-      store,
-      rev: winRev(store, fm),
-      growth: growthPct(store, early, recent),
-      score: scoreStore(store, fm, early, recent),
-    }))
+  // ── Bar data ───────────────────────────────────────────────────────────────
+  const barEarly = useMemo(() =>
+    early.map(m => ({ m, rev: fs.reduce((s, st) => s + (st.monthly_sales[m] ?? 0), 0) })),
+  [fs, early])
 
-    rows.sort((a, b) => {
-      let d = 0
-      if (sortKey === 'revenue') d = a.rev - b.rev
-      else if (sortKey === 'growth') d = (a.growth ?? -1e9) - (b.growth ?? -1e9)
-      else if (sortKey === 'name') d = (a.store.store_name ?? '').localeCompare(b.store.store_name ?? '')
-      else if (sortKey === 'state') d = (a.store.state ?? '').localeCompare(b.store.state ?? '')
-      else if (sortKey === 'category') d = (a.store.category ?? '').localeCompare(b.store.category ?? '')
-      return sortDir === 'asc' ? d : -d
-    })
+  const barRecent = useMemo(() =>
+    recent.map(m => ({ m, rev: fs.reduce((s, st) => s + (st.monthly_sales[m] ?? 0), 0) })),
+  [fs, recent])
 
-    return rows.slice(0, 10)
-  }, [fs, fm, early, recent, sortKey, sortDir])
+  const totalEarly  = barEarly.reduce((s, d) => s + d.rev, 0)
+  const totalRecent = barRecent.reduce((s, d) => s + d.rev, 0)
+  const phaseShift  = totalEarly > 0 ? (totalRecent - totalEarly) / totalEarly * 100 : null
 
-  // ── AI Insights ────────────────────────────────────────────────────────────
-  const insights = useMemo(() => {
-    if (fs.length === 0) return {
-      what: 'No stores match the current filters.',
-      why: 'Try adjusting the state, category, or date range filters to broaden the selection.',
-      action: 'Reset all filters to restore the full portfolio overview.',
-    }
+  const earlyLabel  = early.length  ? `${early[0]} – ${early[early.length - 1]}`    : ''
+  const recentLabel = recent.length ? `${recent[0]} – ${recent[recent.length - 1]}` : ''
 
-    const stateRevs: Record<string, number> = {}
-    const stateGrowths: Record<string, number[]> = {}
-    for (const store of fs) {
-      const state = store.state ?? 'Other'
-      stateRevs[state] = (stateRevs[state] ?? 0) + winRev(store, fm)
-      const g = growthPct(store, early, recent)
-      if (g !== null) (stateGrowths[state] ??= []).push(g)
-    }
-
-    const topRevState = Object.entries(stateRevs).sort((a, b) => b[1] - a[1])[0]
-    const growthAvgs = Object.entries(stateGrowths).map(([s, gs]) => ({
-      state: s,
-      avg: gs.reduce((a, b) => a + b, 0) / gs.length,
-    })).sort((a, b) => b.avg - a.avg)
-
-    const best = growthAvgs[0]
-    const worst = growthAvgs[growthAvgs.length - 1]
-    const atRisk = healthCounts.Declining + healthCounts.Dormant + healthCounts.Underperforming
-    const g = kpis.revGrowth
-
-    const growthStr = g === null ? 'remained stable'
-      : g >= 0 ? `grew by ${fmtPct(g)}`
-        : `declined by ${(-g).toFixed(1)}%`
-
-    const what = `${fs.length} store${fs.length !== 1 ? 's' : ''} generated ${fmtInr(kpis.totalRev)} over ${fm.length} month${fm.length !== 1 ? 's' : ''}. Portfolio revenue ${growthStr} vs. the prior period. ${healthCounts.Healthy} store${healthCounts.Healthy !== 1 ? 's are' : ' is'} performing at a healthy level.`
-
-    const why = best
-      ? `${best.state} led portfolio growth (avg ${fmtPct(best.avg)}/store)${topRevState ? `, while ${topRevState[0]} contributed the highest absolute revenue at ${fmtInr(topRevState[1])}` : ''}. ${worst && worst.state !== best.state ? `${worst.state} showed the weakest momentum at avg ${fmtPct(worst.avg)}/store.` : ''}`
-      : `Revenue is distributed across ${Object.keys(stateRevs).length} state${Object.keys(stateRevs).length !== 1 ? 's' : ''}${topRevState ? `. ${topRevState[0]} leads with ${fmtInr(topRevState[1])} in total revenue` : ''}.`
-
-    const action = atRisk > fs.length * 0.33
-      ? `${atRisk} stores (${Math.round(atRisk / fs.length * 100)}% of portfolio) are at risk. Prioritise recovery programmes with immediate focus on ${worst ? worst.state : 'underperforming regions'}.`
-      : g !== null && g > 5
-        ? `Strong portfolio momentum. Accelerate expansion in ${best ? best.state : 'high-growth markets'} and replicate best-practices to lift ${healthCounts.Recovering} recovering stores into the healthy tier.`
-        : `Stabilise the ${healthCounts.Declining} declining stores before the next review cycle. Investigate category-level root causes to prevent further deterioration.`
-
-    return { what, why, action }
-  }, [fs, fm, early, recent, kpis, healthCounts])
-
-  // ── Sort helpers ───────────────────────────────────────────────────────────
-  const toggleSort = (key: SortKey) => {
-    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    else { setSortKey(key); setSortDir('desc') }
-  }
-
-  const sortIcon = (col: SortKey) =>
-    sortKey !== col
-      ? <ChevronUp className="h-3 w-3 opacity-25" />
-      : sortDir === 'asc'
-        ? <ChevronUp className="h-3 w-3 text-blue-400" />
-        : <ChevronDown className="h-3 w-3 text-blue-400" />
-
-  // ── Render ─────────────────────────────────────────────────────────────────
+  const n       = kpis.scope || 1
+  const cardCls = 'rounded-xl border border-gray-200 bg-white p-4 shadow-sm'
+  const emptyMsg = 'flex items-center justify-center h-64 text-gray-400 text-sm'
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
 
-      {/* ── KPI Row ── */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
-        <KPICard
-          label="Total Stores"
-          value={kpis.n.toLocaleString()}
-          sub={`${fm.length} month window`}
-          icon={<Building2 className="h-4 w-4" />}
-          delay={0}
-        />
-        <KPICard
-          label="Active Stores"
-          value={kpis.active.toLocaleString()}
-          sub={`${kpis.n - kpis.active} inactive`}
-          icon={<Activity className="h-4 w-4" />}
-          delay={0.04}
-        />
-        <KPICard
-          label="Total Revenue"
-          value={fmtInr(kpis.totalRev)}
-          sub={`${fm.length}m window`}
-          icon={<BarChart2 className="h-4 w-4" />}
-          delay={0.08}
-        />
-        <KPICard
-          label="Avg Rev / Store"
-          value={fmtInr(kpis.avgRev)}
-          icon={<BarChart2 className="h-4 w-4" />}
-          delay={0.12}
-        />
-        <KPICard
-          label="Revenue Growth"
-          value={kpis.revGrowth === null ? 'N/A' : fmtPct(kpis.revGrowth)}
-          sub="early vs recent half"
-          valueClass={kpis.revGrowth === null ? undefined : kpis.revGrowth >= 0 ? 'text-emerald-400' : 'text-red-400'}
-          icon={kpis.revGrowth === null
-            ? <Minus className="h-4 w-4" />
-            : kpis.revGrowth >= 0
-              ? <TrendingUp className="h-4 w-4 text-emerald-400" />
-              : <TrendingDown className="h-4 w-4 text-red-400" />}
-          delay={0.16}
-        />
-        <KPICard
-          label="Stores Growing"
-          value={kpis.growing.toLocaleString()}
-          sub={kpis.n > 0 ? `${Math.round(kpis.growing / kpis.n * 100)}% of portfolio` : undefined}
-          valueClass="text-emerald-400"
-          icon={<TrendingUp className="h-4 w-4 text-emerald-400" />}
-          delay={0.20}
-        />
-        <KPICard
-          label="Stores Declining"
-          value={kpis.declining.toLocaleString()}
-          sub={kpis.n > 0 ? `${Math.round(kpis.declining / kpis.n * 100)}% of portfolio` : undefined}
-          valueClass="text-red-400"
-          icon={<TrendingDown className="h-4 w-4 text-red-400" />}
-          delay={0.24}
-        />
-      </div>
+      {/* ── Header ── */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, ease: 'easeOut' }}
+      >
+        <h2 className="text-base font-bold text-gray-900">Network Store Journey Summary</h2>
+        <p className="text-[11px] text-gray-500 mt-0.5 max-w-xl leading-relaxed">
+          How the store network moved between the early phase
+          {earlyLabel  ? ` (${earlyLabel})`  : ''} and recent phase
+          {recentLabel ? ` (${recentLabel})` : ''}.
+          Revenue is context; the story is store movement.
+        </p>
+      </motion.div>
 
-      {/* ── Charts row ── */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      {/* ── KPI Row — staggered spring entrance ── */}
+      <motion.div
+        className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6"
+        variants={kpiContainer}
+        initial="hidden"
+        animate="show"
+      >
+        <KPICard
+          label="Stores in Scope" value={kpis.scope}
+          sub={`of ${stores.length} tracked`}
+          icon={<Users className="h-4 w-4" />}
+          barRatio={kpis.scope / (stores.length || 1)} barColor="#6b7280"
+        />
+        <KPICard
+          label="Improved Rank" value={kpis.improved}
+          sub="Climbed in percentile"
+          icon={<TrendingUp className="h-4 w-4 text-emerald-500" />}
+          barRatio={kpis.improved / n} barColor="#10b981"
+        />
+        <KPICard
+          label="Declined Rank" value={kpis.declined}
+          sub="Slipped in percentile"
+          icon={<TrendingDown className="h-4 w-4" />}
+          barRatio={kpis.declined / n} barColor="#ef4444"
+          danger
+        />
+        <KPICard
+          label="Rising Stars" value={kpis.rising}
+          sub="Bottom→top movers"
+          icon={<Star className="h-4 w-4 text-amber-500" />}
+          barRatio={kpis.rising / n} barColor="#f59e0b"
+        />
+        <KPICard
+          label="Fallen Stars" value={kpis.fallen}
+          sub="Top→bottom movers"
+          icon={<Star className="h-4 w-4" />}
+          barRatio={kpis.fallen / n} barColor="#ef4444"
+          danger
+        />
+        <KPICard
+          label="Dormant Now" value={kpis.dormant}
+          sub="Zero recent revenue"
+          icon={<Moon className="h-4 w-4 text-slate-400" />}
+          barRatio={kpis.dormant / n} barColor="#94a3b8"
+        />
+      </motion.div>
 
-        {/* Revenue Trend */}
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="lg:col-span-2 rounded-xl border border-gray-800 bg-gray-900 p-4"
-        >
-          <h3 className="mb-1 text-sm font-semibold text-gray-200">Revenue Trend by State</h3>
-          <p className="mb-3 text-[11px] text-gray-500">Monthly aggregated revenue per state · spline smoothed</p>
-          {trendTraces.length === 0 ? (
-            <div className="flex items-center justify-center h-72 text-gray-600 text-sm">
-              No data for selected filters
-            </div>
-          ) : (
+      {/* ── Sankey + Donut ── */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
+
+        {/* Store Journey Flow */}
+        <motion.div {...panelSpring(0.12)} className={cn(cardCls, 'lg:col-span-3')}>
+          <h3 className="text-sm font-semibold text-gray-800">Store Journey Flow</h3>
+          <p className="text-[11px] text-gray-500 mt-0.5 mb-3">
+            How early-phase tiers flowed into recent performance categories
+          </p>
+          {sankeyTrace ? (
             <Plot
-              data={trendTraces}
+              data={[{
+                type: 'sankey' as const,
+                orientation: 'h' as const,
+                node: {
+                  pad: 20,
+                  thickness: 24,
+                  line: { color: PT.nodeBorder, width: 0.5 },
+                  label: sankeyTrace.labels,
+                  color: sankeyTrace.colors,
+                },
+                link: {
+                  source:     sankeyTrace.sources,
+                  target:     sankeyTrace.targets,
+                  value:      sankeyTrace.values,
+                  color:      sankeyTrace.linkColors,
+                },
+              }]}
               layout={{
                 paper_bgcolor: 'rgba(0,0,0,0)',
-                plot_bgcolor: 'rgba(0,0,0,0)',
-                font: { color: '#9ca3af', family: 'Inter, sans-serif', size: 11 },
-                legend: {
-                  bgcolor: 'rgba(0,0,0,0)',
-                  font: { color: '#9ca3af', size: 10 },
-                  orientation: 'h' as const,
-                  y: -0.18,
-                },
-                xaxis: { ...PLOTLY_AXES },
-                yaxis: {
-                  ...PLOTLY_AXES,
-                  title: { text: 'Revenue (₹)' },
-                  tickformat: ',.0f',
-                },
-                hovermode: 'x unified' as const,
-                margin: { l: 70, r: 16, t: 8, b: 90 },
-                height: 320,
+                plot_bgcolor:  'rgba(0,0,0,0)',
+                font:  { color: PT.font, family: 'Inter, sans-serif', size: 11 },
+                margin: { l: 8, r: 8, t: 8, b: 8 },
+                height: 300,
+                uirevision: 'constant',
               }}
               config={{ displayModeBar: false, responsive: true }}
               style={{ width: '100%' }}
             />
+          ) : (
+            <div className={emptyMsg}>No data for selected filters</div>
           )}
         </motion.div>
 
-        {/* Store Health Funnel */}
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15 }}
-          className="rounded-xl border border-gray-800 bg-gray-900 p-4"
-        >
-          <h3 className="mb-1 text-sm font-semibold text-gray-200">Store Health Distribution</h3>
-          <p className="mb-3 text-[11px] text-gray-500">Based on growth trend, consistency & activity</p>
-          {fs.length === 0 ? (
-            <div className="flex items-center justify-center h-72 text-gray-600 text-sm">
-              No data for selected filters
-            </div>
+        {/* Store Movement Summary */}
+        <motion.div {...panelSpring(0.2)} className={cn(cardCls, 'lg:col-span-2')}>
+          <h3 className="text-sm font-semibold text-gray-800">Store Movement Summary</h3>
+          <p className="text-[11px] text-gray-500 mt-0.5 mb-3">
+            Performance & status distribution of in-scope stores
+          </p>
+          {journeys.length > 0 ? (
+            <Plot
+              data={[{
+                type: 'pie' as const,
+                hole: 0.55,
+                labels: Object.keys(donutCounts),
+                values: Object.values(donutCounts),
+                marker: {
+                  colors: (Object.keys(donutCounts) as HealthStatus[]).map(k => HEALTH_COLORS[k]),
+                  line: { color: '#ffffff', width: 2 },
+                },
+                textinfo:      'percent' as const,
+                textfont:      { size: 10, color: '#ffffff' },
+                hovertemplate: '<b>%{label}</b><br>%{value} stores · %{percent}<extra></extra>',
+                sort: false,
+              }]}
+              layout={{
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor:  'rgba(0,0,0,0)',
+                font:  { color: PT.font, family: 'Inter, sans-serif', size: 10 },
+                showlegend: true,
+                legend: {
+                  bgcolor: 'rgba(0,0,0,0)',
+                  font: { size: 10, color: PT.font },
+                  orientation: 'h' as const,
+                  x: 0, y: -0.1,
+                },
+                margin: { l: 10, r: 10, t: 10, b: 80 },
+                height: 300,
+                uirevision: 'constant',
+              }}
+              config={{ displayModeBar: false, responsive: true }}
+              style={{ width: '100%' }}
+            />
           ) : (
-            <>
-              <Plot
-                data={[{
-                  type: 'funnel' as const,
-                  y: HEALTH_ORDER,
-                  x: HEALTH_ORDER.map(t => healthCounts[t]),
-                  textposition: 'inside' as const,
-                  textinfo: 'value+percent' as const,
-                  textfont: { color: '#ffffff', size: 12 },
-                  marker: {
-                    color: HEALTH_ORDER.map(t => HEALTH_HEX[t]),
-                    line: { color: '#111827', width: 1.5 },
-                  },
-                }]}
-                layout={{
-                  paper_bgcolor: 'rgba(0,0,0,0)',
-                  plot_bgcolor: 'rgba(0,0,0,0)',
-                  font: { color: '#9ca3af', family: 'Inter, sans-serif', size: 11 },
-                  margin: { l: 120, r: 30, t: 8, b: 8 },
-                  height: 260,
-                  showlegend: false,
-                }}
-                config={{ displayModeBar: false, responsive: true }}
-                style={{ width: '100%' }}
-              />
-              {/* Colour legend pills */}
-              <div className="flex flex-wrap gap-2 mt-1 justify-center">
-                {HEALTH_ORDER.map(t => (
-                  <span key={t} className={cn('text-[10px] font-medium px-2 py-0.5 rounded-full', HEALTH_BADGE[t])}>
-                    {t}
-                  </span>
-                ))}
-              </div>
-            </>
+            <div className={emptyMsg}>No data for selected filters</div>
           )}
         </motion.div>
       </div>
 
-      {/* ── Top 10 Stores table ── */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
-        className="rounded-xl border border-gray-800 bg-gray-900 overflow-hidden"
-      >
-        <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
+      {/* ── Revenue bar chart ── */}
+      <motion.div {...panelSpring(0.28)} className={cardCls}>
+        <div className="flex items-start justify-between gap-2 flex-wrap mb-1">
           <div>
-            <h3 className="text-sm font-semibold text-gray-200">Top 10 Stores</h3>
+            <h3 className="text-sm font-semibold text-gray-800">Revenue Context — Network Trend</h3>
             <p className="text-[11px] text-gray-500 mt-0.5">
-              Sorted by {sortKey} · click column headers to re-sort
+              Monthly gross revenue · early phase vs recent phase
+              {totalEarly + totalRecent > 0 ? ` · ${fmtInr(totalEarly + totalRecent)} total` : ''}
             </p>
           </div>
-          <span className="text-xs text-gray-600">{fs.length} stores total</span>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-800 bg-gray-800/40">
-                <th className="px-3 py-2.5 text-left text-xs text-gray-600 w-8">#</th>
-                {(
-                  [
-                    { key: 'name' as SortKey, label: 'Store Name' },
-                    { key: 'state' as SortKey, label: 'State' },
-                    { key: 'category' as SortKey, label: 'Category' },
-                    { key: 'revenue' as SortKey, label: 'Revenue' },
-                    { key: 'growth' as SortKey, label: 'Growth %' },
-                  ] as const
-                ).map(({ key, label }) => (
-                  <th key={key} className="px-3 py-2.5 text-left">
-                    <button
-                      onClick={() => toggleSort(key)}
-                      className="flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-gray-400 hover:text-gray-200 transition-colors"
-                    >
-                      {label}
-                      {sortIcon(key)}
-                    </button>
-                  </th>
-                ))}
-                <th className="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-gray-400">
-                  Trend
-                </th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {tableRows.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-3 py-10 text-center text-gray-600 text-sm">
-                    No stores match the current filters
-                  </td>
-                </tr>
-              ) : (
-                tableRows.map(({ store, rev, growth, score: s }, i) => {
-                  const tag = trendTag(growth)
-                  const t = tier(s)
-                  return (
-                    <tr
-                      key={store.store_id}
-                      className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors"
-                    >
-                      <td className="px-3 py-2.5 text-gray-600 tabular-nums text-xs">{i + 1}</td>
-                      <td className="px-3 py-2.5">
-                        <span className="text-gray-200 font-medium block truncate max-w-[180px]" title={store.store_name ?? store.store_id}>
-                          {store.store_name ?? store.store_id}
-                        </span>
-                        <span className="text-[10px] text-gray-600">{store.store_id}</span>
-                      </td>
-                      <td className="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{store.state ?? '—'}</td>
-                      <td className="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{store.category ?? '—'}</td>
-                      <td className="px-3 py-2.5 text-gray-200 tabular-nums font-medium whitespace-nowrap">
-                        {fmtInr(rev)}
-                      </td>
-                      <td className={cn('px-3 py-2.5 tabular-nums font-medium whitespace-nowrap', tag.cls)}>
-                        {tag.label}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <span className={cn('inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap', HEALTH_BADGE[t])}>
-                          {tag.icon === 'up' && <TrendingUp className="h-3 w-3 shrink-0" />}
-                          {tag.icon === 'flat' && <Minus className="h-3 w-3 shrink-0" />}
-                          {tag.icon === 'down' && <TrendingDown className="h-3 w-3 shrink-0" />}
-                          {t}
-                        </span>
-                      </td>
-                    </tr>
-                  )
-                })
+          {phaseShift !== null && (
+            <motion.span
+              key={Math.round(phaseShift)}
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+              className={cn(
+                'text-xs font-semibold px-2.5 py-1 rounded-full border',
+                phaseShift >= 0
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-red-50 text-red-700 border-red-200',
               )}
-            </tbody>
-          </table>
+            >
+              {fmtPct(phaseShift)} phase shift
+            </motion.span>
+          )}
         </div>
-      </motion.div>
 
-      {/* ── AI Insights ── */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <InsightCard variant="info"  tag="What Happened" title="Portfolio Summary"  body={insights.what}   delay={0.25} />
-        <InsightCard variant="meta"  tag="Why"           title="Key Drivers"       body={insights.why}    delay={0.30} />
-        <InsightCard variant="good"  tag="Action"        title="Recommendation"    body={insights.action} delay={0.35} />
-      </div>
+        {(barEarly.length + barRecent.length) === 0 ? (
+          <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
+            No data for selected filters
+          </div>
+        ) : (
+          <Plot
+            data={[
+              {
+                type: 'bar' as const,
+                name: 'Early Phase',
+                x: barEarly.map(d => d.m),
+                y: barEarly.map(d => d.rev),
+                marker: { color: '#94a3b8' },
+                hovertemplate: '<b>%{x}</b><br>₹%{y:,.0f}<extra>Early Phase</extra>',
+              },
+              {
+                type: 'bar' as const,
+                name: 'Recent Phase',
+                x: barRecent.map(d => d.m),
+                y: barRecent.map(d => d.rev),
+                marker: { color: '#3b82f6' },
+                hovertemplate: '<b>%{x}</b><br>₹%{y:,.0f}<extra>Recent Phase</extra>',
+              },
+            ]}
+            layout={{
+              paper_bgcolor: 'rgba(0,0,0,0)',
+              plot_bgcolor:  'rgba(0,0,0,0)',
+              font:   { color: PT.font, family: 'Inter, sans-serif', size: 11 },
+              xaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true },
+              yaxis:  {
+                gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line,
+                automargin: true, tickformat: ',.0s',
+                title: { text: 'Revenue (₹)' },
+              },
+              legend: {
+                bgcolor: 'rgba(0,0,0,0)',
+                font: { color: PT.font, size: 10 },
+                orientation: 'h' as const,
+                x: 0, y: 1.08,
+              },
+              margin:     { l: 70, r: 16, t: 36, b: 70 },
+              height:     260,
+              bargap:     0.25,
+              uirevision: 'constant',
+            }}
+            config={{ displayModeBar: false, responsive: true }}
+            style={{ width: '100%' }}
+          />
+        )}
+      </motion.div>
 
     </div>
   )

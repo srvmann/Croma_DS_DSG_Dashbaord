@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Database, Moon, RotateCcw, Sun } from 'lucide-react'
+import { Database, RotateCcw } from 'lucide-react'
 import { useDataContext } from './contexts/DataContext'
 import { useFilters, type FilterState } from './hooks/useFilters'
 import {
@@ -57,14 +57,14 @@ function DataStatusChip({
 }) {
   if (storeCount === 0) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
-        <span className="h-1.5 w-1.5 rounded-full bg-gray-400 dark:bg-gray-600" />
+      <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium bg-gray-100 text-gray-500">
+        <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
         No Data
       </span>
     )
   }
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium bg-emerald-50 dark:bg-emerald-900/25 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/50">
+    <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
       <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
       {storeCount} store{storeCount !== 1 ? 's' : ''} &middot;{' '}
       {monthCount} month{monthCount !== 1 ? 's' : ''} loaded
@@ -125,7 +125,7 @@ function FilterBar({
 
       {/* From Month */}
       <div className="flex items-center gap-1.5">
-        <span className="text-xs text-gray-500 dark:text-gray-400 select-none">From</span>
+        <span className="text-xs text-gray-500 select-none">From</span>
         <Select
           value={toSel(filters.fromMonth)}
           onValueChange={v => onFilterChange('fromMonth', fromSel(v))}
@@ -144,7 +144,7 @@ function FilterBar({
 
       {/* To Month */}
       <div className="flex items-center gap-1.5">
-        <span className="text-xs text-gray-500 dark:text-gray-400 select-none">To</span>
+        <span className="text-xs text-gray-500 select-none">To</span>
         <Select
           value={toSel(filters.toMonth)}
           onValueChange={v => onFilterChange('toMonth', fromSel(v))}
@@ -168,8 +168,8 @@ function FilterBar({
         className={cn(
           'inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium transition-colors',
           activeCount > 0
-            ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20'
-            : 'text-gray-400 dark:text-gray-600 cursor-default',
+            ? 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+            : 'text-gray-400 cursor-default',
         )}
       >
         <RotateCcw className="h-3 w-3" />
@@ -187,13 +187,13 @@ function FilterBar({
 function TabPlaceholder({ label, filters }: { label: string; filters: FilterState }) {
   const active = Object.entries(filters).filter(([, v]) => Boolean(v))
   return (
-    <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/50 min-h-[420px] flex flex-col items-center justify-center gap-4 p-8">
-      <div className="h-14 w-14 rounded-2xl bg-gradient-to-br from-blue-500/15 to-cyan-400/15 dark:from-blue-500/20 dark:to-cyan-400/20 flex items-center justify-center">
-        <Database className="h-6 w-6 text-blue-500 dark:text-blue-400" />
+    <div className="rounded-xl border border-gray-200 bg-white min-h-[420px] flex flex-col items-center justify-center gap-4 p-8">
+      <div className="h-14 w-14 rounded-2xl bg-gradient-to-br from-blue-500/15 to-cyan-400/15 flex items-center justify-center">
+        <Database className="h-6 w-6 text-blue-500" />
       </div>
       <div className="text-center">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{label}</h3>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400 max-w-xs">
+        <h3 className="text-lg font-semibold text-gray-900">{label}</h3>
+        <p className="mt-1 text-sm text-gray-500 max-w-xs">
           Tab content coming soon.
         </p>
       </div>
@@ -202,7 +202,7 @@ function TabPlaceholder({ label, filters }: { label: string; filters: FilterStat
           {active.map(([k, v]) => (
             <span
               key={k}
-              className="inline-flex items-center rounded-full px-2 py-0.5 text-xs bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-500/20"
+              className="inline-flex items-center rounded-full px-2 py-0.5 text-xs bg-blue-50 text-blue-700 border border-blue-200"
             >
               {k}: {v}
             </span>
@@ -219,7 +219,6 @@ export default function App() {
   const { isLoading, hasData, stores, months, states, categories, refetchData } =
     useDataContext()
 
-  const [isDark, setIsDark] = useState(true)
   const [activeTab, setActiveTab] = useState<TabId>('executive')
 
   // Show skeleton for at least 400 ms to prevent content flash on fast loads
@@ -232,17 +231,10 @@ export default function App() {
     }
   }, [isLoading])
 
+  // Always light mode — remove dark class on mount
+  useEffect(() => { document.documentElement.classList.remove('dark') }, [])
+
   const { getFilters, setFilter, resetFilters, getActiveCount } = useFilters()
-
-  // Keep <html class="dark"> in sync with toggle state
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', isDark)
-  }, [isDark])
-
-  // Ensure dark mode is applied before the first paint
-  useEffect(() => {
-    document.documentElement.classList.add('dark')
-  }, [])
 
   const filters = getFilters(activeTab)
   const activeCount = getActiveCount(activeTab)
@@ -273,20 +265,20 @@ export default function App() {
   // ── Main dashboard ────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 transition-colors duration-200">
+    <div className="min-h-screen bg-gray-50 text-gray-900">
 
       {/* ── Top Nav ── */}
-      <header className="sticky top-0 z-50 h-16 border-b border-gray-200 dark:border-gray-800 bg-white/95 dark:bg-gray-950/95 backdrop-blur-sm">
+      <header className="sticky top-0 z-50 h-16 border-b border-gray-200 bg-white/95 backdrop-blur-sm">
         <div className="flex items-center justify-between h-full px-4 max-w-screen-2xl mx-auto gap-4">
           <div className="flex items-center gap-3 min-w-0">
             <span className="shrink-0 inline-flex items-center justify-center px-3 h-8 rounded-full bg-gradient-to-r from-blue-600 to-cyan-400 text-white text-sm font-bold tracking-wide select-none shadow-sm">
               SW
             </span>
             <div className="min-w-0">
-              <p className="text-base font-bold text-gray-900 dark:text-white leading-none truncate">
+              <p className="text-base font-bold text-gray-900 leading-none truncate">
                 StoreWise
               </p>
-              <p className="text-[10px] text-gray-500 dark:text-gray-400 leading-tight mt-0.5">
+              <p className="text-[10px] text-gray-500 leading-tight mt-0.5">
                 Store Analytics Platform
               </p>
             </div>
@@ -297,19 +289,12 @@ export default function App() {
               storeCount={stores.length}
               monthCount={months.length}
             />
-            <button
-              onClick={() => setIsDark(d => !d)}
-              aria-label="Toggle dark mode"
-              className="flex items-center justify-center h-8 w-8 rounded-md text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-            >
-              {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </button>
           </div>
         </div>
       </header>
 
       {/* ── Tab Bar (sticky top-16 = 64 px) ── */}
-      <div className="sticky top-16 z-40 border-b border-gray-200 dark:border-gray-800 bg-white/95 dark:bg-gray-950/95 backdrop-blur-sm overflow-x-auto scrollbar-hide">
+      <div className="sticky top-16 z-40 border-b border-gray-200 bg-white/95 backdrop-blur-sm overflow-x-auto scrollbar-hide">
         <div className="flex items-center h-12 px-4 gap-0.5 min-w-max max-w-screen-2xl mx-auto">
           {TABS.map(tab => (
             <button
@@ -318,15 +303,15 @@ export default function App() {
               className={cn(
                 'relative px-3 py-1.5 text-sm font-medium rounded-md whitespace-nowrap transition-colors',
                 activeTab === tab.id
-                  ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10'
-                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800/60',
+                  ? 'text-blue-600 bg-blue-50'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100',
               )}
             >
               {tab.label}
               {activeTab === tab.id && (
                 <motion.span
                   layoutId="tab-underline"
-                  className="absolute inset-x-0 -bottom-[1px] h-0.5 bg-blue-500 dark:bg-blue-400 rounded-t"
+                  className="absolute inset-x-0 -bottom-[1px] h-0.5 bg-blue-500 rounded-t"
                   transition={{ type: 'spring', stiffness: 400, damping: 30 }}
                 />
               )}
@@ -336,7 +321,7 @@ export default function App() {
       </div>
 
       {/* ── Filter Bar (sticky top-28 = 112 px = 64+48) ── */}
-      <div className="sticky top-28 z-30 border-b border-gray-200 dark:border-gray-800 bg-white/90 dark:bg-gray-950/90 backdrop-blur-sm">
+      <div className="sticky top-28 z-30 border-b border-gray-200 bg-white/90 backdrop-blur-sm">
         <div className="px-4 py-2 max-w-screen-2xl mx-auto">
           <FilterBar
             states={states}
