@@ -62,6 +62,40 @@ export const uploadTargets = (
 export const loadDemoData = () =>
   api.post<UploadSalesResult>('/api/demo/load')
 
+// ── Target management ─────────────────────────────────────────────────────────
+
+export interface TargetFileRecord {
+  month: string
+  filename: string
+  store_count: number
+  uploaded_at: string
+  file_size_kb: number
+  status: 'active' | 'inactive' | 'archived'
+}
+
+export const listTargets = () =>
+  api.get<{ targets: TargetFileRecord[] }>('/api/targets/list')
+
+export const uploadManagedTarget = (
+  file: File,
+  monthLabel: string,
+  onProgress?: (pct: number) => void,
+) => {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('month_label', monthLabel)
+  return api.post<TargetFileRecord>('/api/targets/upload', form, {
+    onUploadProgress: e =>
+      onProgress?.(Math.round((e.loaded * 100) / (e.total ?? 1))),
+  })
+}
+
+export const setActiveTarget = (month: string) =>
+  api.post<TargetFileRecord>('/api/targets/set-active', { month })
+
+export const archiveTarget = (month: string) =>
+  api.post<TargetFileRecord>('/api/targets/archive', { month })
+
 export const uploadFile = (file: File) => {
   const form = new FormData()
   form.append('file', file)

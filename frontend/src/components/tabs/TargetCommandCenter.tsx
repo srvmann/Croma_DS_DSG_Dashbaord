@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import {
   Activity, AlertCircle, BarChart2,
   Calendar, ChevronDown, ChevronUp,
-  Download, Minus, Search, Target,
+  Download, Minus, Search, Settings, Target,
   TrendingDown, TrendingUp, X, Zap,
 } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -13,6 +13,7 @@ import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import { cn } from '@/lib/utils'
+import TargetManagementDrawer from './TargetManagementDrawer'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -97,7 +98,7 @@ function RiskBadge({ status }: { status: RiskStatus }) {
   )
 }
 
-function NoTargetsPrompt() {
+function NoTargetsPrompt({ onManage }: { onManage: () => void }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -115,12 +116,13 @@ function NoTargetsPrompt() {
           <span className="text-gray-300">Store_ID</span> and <span className="text-gray-300">Monthly_Target</span> columns.
         </p>
       </div>
-      <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-800 border border-gray-700">
-        <AlertCircle className="h-4 w-4 text-amber-400 shrink-0" />
-        <span className="text-xs text-gray-400">
-          Go back to the upload screen via the <span className="text-gray-200 font-medium">Reset Data</span> button in the header.
-        </span>
-      </div>
+      <button
+        onClick={onManage}
+        className="flex items-center gap-2 h-10 px-5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors"
+      >
+        <Settings className="h-4 w-4" />
+        Open Target Manager
+      </button>
     </motion.div>
   )
 }
@@ -186,14 +188,27 @@ function SortBtn({ col, sortKey, sortDir, onSort, label }: {
   )
 }
 
+function ManageBtn({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-2 h-8 px-3.5 rounded-lg bg-gray-800 border border-gray-700 text-xs font-medium text-gray-300 hover:text-white hover:border-gray-500 transition-colors"
+    >
+      <Settings className="h-3.5 w-3.5" />
+      Manage Targets
+    </button>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 interface Props { filters: FilterState }
 
 export default function TargetCommandCenter({ filters }: Props) {
-  const { stores, months, hasTargets } = useDataContext()
+  const { stores, months, hasTargets, refetchData } = useDataContext()
 
   const [dayOfMonth, setDayOfMonth] = useState(15)
+  const [showDrawer, setShowDrawer] = useState(false)
   const [tableSearch, setTableSearch]     = useState('')
   const [tableSortKey, setTableSortKey]   = useState<TableSortKey>('achPct')
   const [tableSortDir, setTableSortDir]   = useState<'asc' | 'desc'>('asc')
@@ -496,12 +511,35 @@ export default function TargetCommandCenter({ filters }: Props) {
 
   // ── Guards ────────────────────────────────────────────────────────────────
 
-  if (!hasTargets) return <NoTargetsPrompt />
+  if (!hasTargets) return (
+    <>
+      <div className="flex justify-end mb-3">
+        <ManageBtn onClick={() => setShowDrawer(true)} />
+      </div>
+      <NoTargetsPrompt onManage={() => setShowDrawer(true)} />
+      <TargetManagementDrawer
+        open={showDrawer}
+        onClose={() => setShowDrawer(false)}
+        onTargetChanged={refetchData}
+      />
+    </>
+  )
+
   if (filteredStores.length === 0) {
     return (
-      <div className="rounded-xl border border-gray-800 bg-gray-900/50 min-h-72 flex items-center justify-center">
-        <p className="text-sm text-gray-500">No stores with targets match the current filters.</p>
-      </div>
+      <>
+        <div className="flex justify-end mb-3">
+          <ManageBtn onClick={() => setShowDrawer(true)} />
+        </div>
+        <div className="rounded-xl border border-gray-800 bg-gray-900/50 min-h-72 flex items-center justify-center">
+          <p className="text-sm text-gray-500">No stores with targets match the current filters.</p>
+        </div>
+        <TargetManagementDrawer
+          open={showDrawer}
+          onClose={() => setShowDrawer(false)}
+          onTargetChanged={refetchData}
+        />
+      </>
     )
   }
 
@@ -516,6 +554,17 @@ export default function TargetCommandCenter({ filters }: Props) {
 
   return (
     <div className="space-y-6">
+
+      {/* ── Page Header ── */}
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-base font-bold text-gray-100">Target Command Center</h2>
+          <p className="text-[11px] text-gray-500 mt-0.5">
+            Tracking <span className="text-gray-300 font-medium">{targetMonth}</span> · {filteredStores.length} stores
+          </p>
+        </div>
+        <ManageBtn onClick={() => setShowDrawer(true)} />
+      </div>
 
       {/* ── Day Slider ── */}
       <DaySlider value={dayOfMonth} onChange={setDayOfMonth} targetMonth={targetMonth} />
@@ -929,6 +978,13 @@ export default function TargetCommandCenter({ filters }: Props) {
           </div>
         )}
       </motion.div>
+
+      {/* ── Target Management Drawer ── */}
+      <TargetManagementDrawer
+        open={showDrawer}
+        onClose={() => setShowDrawer(false)}
+        onTargetChanged={refetchData}
+      />
 
     </div>
   )

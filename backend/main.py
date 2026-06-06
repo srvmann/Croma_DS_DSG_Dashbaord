@@ -20,8 +20,9 @@ import os
 import shutil
 
 import pandas as pd
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from parser import (
     analyze_sheet,
@@ -31,6 +32,7 @@ from parser import (
     parse_targets,
     validate_store_match,
 )
+import targets_manager as tm
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +299,61 @@ def get_store_detail(store_id: str):
         store["target"] = None
 
     return store
+
+
+# ── Target management endpoints ───────────────────────────────────────────────
+
+
+class MonthBody(BaseModel):
+    month: str
+
+
+@app.get("/api/targets/list")
+def list_managed_targets():
+    """Return metadata for all managed target files (active, inactive, archived)."""
+    return {"targets": tm.list_targets()}
+
+
+@app.post("/api/targets/upload")
+async def upload_managed_target(
+    file: UploadFile = File(...),
+    month_label: str = Form(...),
+):
+    """Upload a targets XLSX for a specific month (e.g. Jul-2025)."""
+    _validate_excel(file)
+    if not tm.validate_month(month_label):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid month format '{month_label}'. Expected MMM-YYYY, e.g. Jul-2025.",
+        )
+    content = await file.read()
+    try:
+        meta = tm.save_target(content, month_label.strip())
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return meta
+
+
+@app.post("/api/targets/set-active")
+def set_active_target(body: MonthBody):
+    """Make a managed month the active target (copies it to data/targets.xlsx)."""
+    if not tm.validate_month(body.month):
+        raise HTTPException(status_code=400, detail=f"Invalid month '{body.month}'")
+    try:
+        return tm.set_active(body.month.strip())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/targets/archive")
+def archive_managed_target(body: MonthBody):
+    """Move a target file to the archive folder."""
+    if not tm.validate_month(body.month):
+        raise HTTPException(status_code=400, detail=f"Invalid month '{body.month}'")
+    try:
+        return tm.archive_target(body.month.strip())
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 # ── Generic file-explorer endpoints (compatibility) ───────────────────────────
