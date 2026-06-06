@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from './components/ui/select'
 import UploadScreen from './components/UploadScreen'
+import ExecutiveOverview from './components/tabs/ExecutiveOverview'
 import { cn } from './lib/utils'
 
 // ── Tab registry ──────────────────────────────────────────────────────────────
@@ -343,7 +344,10 @@ export default function App() {
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.2, ease: 'easeOut' }}
           >
-            <TabPlaceholder label={currentTab.label} filters={filters} />
+            {activeTab === 'executive'
+              ? <ExecutiveOverview filters={filters} />
+              : <TabPlaceholder label={currentTab.label} filters={filters} />
+            }
           </motion.div>
         </AnimatePresence>
       </main>
