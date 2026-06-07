@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Routes, Route } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Database, RotateCcw } from 'lucide-react'
 import { useDataContext } from './contexts/DataContext'
@@ -12,6 +13,7 @@ import {
 } from './components/ui/select'
 import UploadScreen from './components/UploadScreen'
 import { AppSkeleton } from './components/Skeleton'
+import StoreDeepDivePage from './pages/StoreDeepDivePage'
 import ExecutiveOverview from './components/tabs/ExecutiveOverview'
 import MonthlyRevenue from './components/tabs/MonthlyRevenue'
 import StoreJourneyMap from './components/tabs/StoreJourneyMap'
@@ -269,6 +271,9 @@ export default function App() {
   // ── Main dashboard ────────────────────────────────────────────────────────
 
   return (
+    <Routes>
+      <Route path="/store/:storeId" element={<StoreDeepDivePage />} />
+      <Route path="/*" element={
     <div className="min-h-screen bg-gray-50 text-gray-900">
 
       {/* ── Top Nav ── */}
@@ -358,9 +363,9 @@ export default function App() {
                   : activeTab === 'geo'
                     ? <GeoAnalytics filters={filters} />
                     : activeTab === 'rising-stars'
-                      ? <RisingStars filters={filters} />
+                      ? <RisingStars filters={filters} onNavigateToStore={handleNavigateToStore} />
                       : activeTab === 'fallen-stars'
-                        ? <FallenStars filters={filters} />
+                        ? <FallenStars filters={filters} onNavigateToStore={handleNavigateToStore} />
                         : activeTab === 'revenue-movers'
                           ? <RevenueMovers filters={filters} />
                           : activeTab === 'store-deep-dive'
@@ -384,5 +389,7 @@ export default function App() {
       </footer>
 
     </div>
+      } />
+    </Routes>
   )
 }

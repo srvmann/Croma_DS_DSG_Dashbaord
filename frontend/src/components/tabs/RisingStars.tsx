@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
-import { motion } from 'framer-motion'
-import { TrendingUp } from 'lucide-react'
+import { TrendingUp, Info } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import createPlotlyComponent from 'react-plotly.js/factory'
 // @ts-ignore — plotly.js-dist-min does not ship its own .d.ts
@@ -9,11 +8,10 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import Sparkline from './Sparkline'
 
 const Plot = createPlotlyComponent(Plotly)
 
-type SortKey = 'growth' | 'revenue' | 'state'
+type SortKey = 'growth' | 'earlyRev' | 'recentRev' | 'earlyRank' | 'recentRank' | 'health' | 'state'
 type SortDir = 'asc' | 'desc'
 
 interface RiserRow {
@@ -21,17 +19,13 @@ interface RiserRow {
   growth: number
   earlyAvg: number
   recentAvg: number
-  totalRev: number
-  sparkline: number[]
+  earlyRank: number
+  recentRank: number
+  health: number
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function winRev(store: StoreRecord, ms: string[]) {
-  return ms.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
-}
 function mAvg(store: StoreRecord, ms: string[]) {
-  return ms.length ? winRev(store, ms) / ms.length : 0
+  return ms.length ? ms.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0) / ms.length : 0
 }
 function fmtInr(n: number) {
   const abs = Math.abs(n)
@@ -45,67 +39,30 @@ function fmtPct(n: number) {
   return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
 }
 
-const PALETTE = [
-  '#10b981','#3b82f6','#f59e0b','#8b5cf6',
-  '#06b6d4','#f97316','#84cc16','#ec4899',
-  '#14b8a6','#a855f7',
+const TABLE_COLS: { key: SortKey | null; label: string; align: 'left' | 'right' | 'center' }[] = [
+  { key: null,          label: 'Store',        align: 'left'   },
+  { key: 'state',       label: 'State',        align: 'left'   },
+  { key: null,          label: 'Status',       align: 'left'   },
+  { key: 'earlyRev',   label: 'Early Rev',    align: 'right'  },
+  { key: 'recentRev',  label: 'Recent Rev',   align: 'right'  },
+  { key: 'growth',      label: 'Growth %',     align: 'right'  },
+  { key: 'earlyRank',  label: 'Early Rank',   align: 'center' },
+  { key: 'recentRank', label: 'Recent Rank',  align: 'center' },
+  { key: 'health',      label: 'Health',       align: 'right'  },
 ]
 
-// ── Card ─────────────────────────────────────────────────────────────────────
-
-function RiserCard({ rank, row }: { rank: number; row: RiserRow }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: rank * 0.03 }}
-      className="rounded-xl border border-gray-800 bg-gray-900 overflow-hidden hover:border-emerald-800/60 transition-colors"
-    >
-      <div className="px-4 pt-4 pb-2 flex items-start gap-2">
-        <span className="shrink-0 mt-0.5 w-6 h-6 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] font-bold flex items-center justify-center">
-          {rank}
-        </span>
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-gray-200 truncate">
-            {row.store.store_name ?? row.store.store_id}
-          </p>
-          <p className="text-[11px] text-gray-500">
-            {row.store.state ?? '—'} · {row.store.category ?? '—'}
-          </p>
-        </div>
-      </div>
-
-      <div className="px-2">
-        <Sparkline values={row.sparkline} color="#10b981" height={52} />
-      </div>
-
-      <div className="px-4 pb-4 pt-2 grid grid-cols-2 gap-2 border-t border-gray-800/60">
-        <div>
-          <p className="text-xl font-bold text-emerald-400 tabular-nums leading-tight">
-            {fmtPct(row.growth)}
-          </p>
-          <p className="text-[10px] text-gray-500 uppercase tracking-wider">Growth</p>
-        </div>
-        <div className="text-right">
-          <p className="text-sm font-semibold text-gray-200 tabular-nums">{fmtInr(row.totalRev)}</p>
-          <p className="text-[11px] text-gray-500">{fmtInr(row.recentAvg)}/mo recent</p>
-        </div>
-      </div>
-    </motion.div>
-  )
-}
-
-// ── Main Component ────────────────────────────────────────────────────────────
-
-export default function RisingStars({ filters }: { filters: FilterState }) {
+export default function RisingStars({
+  filters,
+  onNavigateToStore,
+}: {
+  filters: FilterState
+  onNavigateToStore?: (storeId: string) => void
+}) {
   const { stores, months } = useDataContext()
-
   const [sortKey, setSortKey] = useState<SortKey>('growth')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
-  const [showAll, setShowAll] = useState(false)
 
-  // ── Filtered + computed data
-  const { fm, risers } = useMemo(() => {
+  const { risers, kpi, top15 } = useMemo(() => {
     let fs: StoreRecord[] = stores
     if (filters.state) fs = fs.filter(s => s.state === filters.state)
     if (filters.category) fs = fs.filter(s => s.category === filters.category)
@@ -124,58 +81,101 @@ export default function RisingStars({ filters }: { filters: FilterState }) {
     const early = fm.slice(0, half)
     const recent = fm.slice(half)
 
-    const risers: RiserRow[] = []
+    const earlyRankMap = new Map(
+      [...fs].sort((a, b) => mAvg(a, early) - mAvg(b, early)).map((s, i) => [s.store_id, i + 1])
+    )
+    const recentRankMap = new Map(
+      [...fs].sort((a, b) => mAvg(a, recent) - mAvg(b, recent)).map((s, i) => [s.store_id, i + 1])
+    )
+    const total = fs.length
 
+    const risers: RiserRow[] = []
     for (const store of fs) {
-      const earlyAvg = early.length ? mAvg(store, early) : 0
-      const recentAvg = recent.length ? mAvg(store, recent) : 0
+      const earlyAvg = mAvg(store, early)
+      const recentAvg = mAvg(store, recent)
       if (earlyAvg === 0 || !early.length || !recent.length) continue
       const growth = (recentAvg - earlyAvg) / earlyAvg * 100
       if (growth <= 0) continue
-      risers.push({
-        store,
-        growth,
-        earlyAvg,
-        recentAvg,
-        totalRev: winRev(store, fm),
-        sparkline: fm.map(m => store.monthly_sales[m] ?? 0),
-      })
+      const earlyRank = earlyRankMap.get(store.store_id) ?? 0
+      const recentRank = recentRankMap.get(store.store_id) ?? 0
+      const health = total > 0 ? +(recentRank / total * 100).toFixed(1) : 0
+      risers.push({ store, growth, earlyAvg, recentAvg, earlyRank, recentRank, health })
     }
 
-    return { fm, risers }
+    const totalEarly = risers.reduce((s, r) => s + r.earlyAvg, 0)
+    const totalRecent = risers.reduce((s, r) => s + r.recentAvg, 0)
+    const topRiser = risers.length > 0
+      ? risers.reduce((best, r) => r.growth > best.growth ? r : best)
+      : null
+    const avgGrowth = risers.length > 0
+      ? risers.reduce((s, r) => s + r.growth, 0) / risers.length
+      : 0
+
+    const top15 = [...risers].sort((a, b) => b.recentAvg - a.recentAvg).slice(0, 15)
+
+    return {
+      risers,
+      kpi: { count: risers.length, addedRevenue: totalRecent - totalEarly, earlyTotal: totalEarly, recentTotal: totalRecent, topRiser, avgGrowth },
+      top15,
+    }
   }, [stores, months, filters])
 
-  // ── Sorted cards
   const sorted = useMemo(() => {
-    const arr = [...risers]
-    arr.sort((a, b) => {
-      if (sortKey === 'growth') {
-        return sortDir === 'desc' ? b.growth - a.growth : a.growth - b.growth
+    return [...risers].sort((a, b) => {
+      if (sortKey === 'state') {
+        const sa = a.store.state ?? '', sb = b.store.state ?? ''
+        return sortDir === 'asc' ? sa.localeCompare(sb) : sb.localeCompare(sa)
       }
-      if (sortKey === 'revenue') {
-        return sortDir === 'desc' ? b.totalRev - a.totalRev : a.totalRev - b.totalRev
+      const map: Record<string, [number, number]> = {
+        growth:      [a.growth,      b.growth],
+        earlyRev:   [a.earlyAvg,   b.earlyAvg],
+        recentRev:  [a.recentAvg,  b.recentAvg],
+        earlyRank:  [a.earlyRank,  b.earlyRank],
+        recentRank: [a.recentRank, b.recentRank],
+        health:      [a.health,      b.health],
       }
-      const sa = a.store.state ?? '', sb = b.store.state ?? ''
-      return sortDir === 'asc' ? sa.localeCompare(sb) : sb.localeCompare(sa)
+      const [va, vb] = map[sortKey] ?? [0, 0]
+      return sortDir === 'desc' ? vb - va : va - vb
     })
-    return arr
   }, [risers, sortKey, sortDir])
 
-  const displayed = showAll ? sorted : sorted.slice(0, 12)
+  const { chartTraces, chartCategories } = useMemo(() => {
+    if (top15.length === 0) return { chartTraces: [] as object[], chartCategories: [] as string[] }
+    const ordered = [...top15].sort((a, b) => a.recentAvg - b.recentAvg)
+    const chartCategories = ordered.map(r => r.store.store_id)
 
-  // ── Momentum chart traces (top 10 by growth)
-  const momentumTraces = useMemo(() => {
-    const top10 = [...risers].sort((a, b) => b.growth - a.growth).slice(0, 10)
-    return top10.map((row, i) => ({
+    const lines = ordered.map(row => ({
       type: 'scatter' as const,
       mode: 'lines' as const,
-      name: row.store.store_name ?? row.store.store_id,
-      x: fm,
-      y: fm.map(m => row.store.monthly_sales[m] ?? 0),
-      line: { shape: 'spline' as const, width: 2, color: PALETTE[i % PALETTE.length] },
-      hovertemplate: `<b>${row.store.store_name ?? row.store.store_id}</b><br>%{x}: ₹%{y:,.0f}<extra></extra>`,
+      x: [row.earlyAvg, row.recentAvg],
+      y: [row.store.store_id, row.store.store_id],
+      showlegend: false,
+      line: { color: '#d1d5db', width: 2 },
+      hoverinfo: 'none' as const,
     }))
-  }, [risers, fm])
+
+    const earlyTrace = {
+      type: 'scatter' as const,
+      mode: 'markers' as const,
+      name: 'Early',
+      x: ordered.map(r => r.earlyAvg),
+      y: ordered.map(r => r.store.store_id),
+      marker: { symbol: 'circle', size: 10, color: '#9ca3af' },
+      hovertemplate: '<b>%{y}</b><br>Early: ₹%{x:,.0f}/mo<extra></extra>',
+    }
+
+    const recentTrace = {
+      type: 'scatter' as const,
+      mode: 'markers' as const,
+      name: 'Recent',
+      x: ordered.map(r => r.recentAvg),
+      y: ordered.map(r => r.store.store_id),
+      marker: { symbol: 'circle', size: 10, color: '#3b82f6' },
+      hovertemplate: '<b>%{y}</b><br>Recent: ₹%{x:,.0f}/mo<extra></extra>',
+    }
+
+    return { chartTraces: [...lines, earlyTrace, recentTrace], chartCategories }
+  }, [top15])
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -192,97 +192,176 @@ export default function RisingStars({ filters }: { filters: FilterState }) {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-200 flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-emerald-400" />
-            Rising Stars
-          </h2>
-          <p className="text-xs text-gray-500 mt-0.5">
-            {risers.length} stores with positive growth — ranked by early‑to‑recent momentum
+      {/* Page Header */}
+      <div>
+        <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+          <TrendingUp className="w-5 h-5 text-emerald-500" />
+          Rising Stars — Stores That Recovered &amp; Grew
+        </h2>
+        <p className="text-sm text-gray-500 mt-1">
+          Bottom 40% early → top 30% recently · {risers.length} stores · nurture &amp; scale
+        </p>
+      </div>
+
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Rising Stars</p>
+          <p className="text-3xl font-bold text-gray-900">{kpi.count}</p>
+          <p className="text-xs text-gray-400 mt-1">in current scope</p>
+        </div>
+
+        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Added Revenue</p>
+          <p className="text-2xl font-bold text-gray-900">{fmtInr(kpi.addedRevenue)}</p>
+          <p className="text-xs text-gray-400 mt-1">{fmtInr(kpi.earlyTotal)} → {fmtInr(kpi.recentTotal)}</p>
+        </div>
+
+        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Top Riser</p>
+          <p className="text-2xl font-bold text-gray-900">
+            {kpi.topRiser?.store.store_name ?? kpi.topRiser?.store.store_id ?? '—'}
+          </p>
+          <p className="text-xs text-emerald-600 mt-1">
+            {kpi.topRiser ? `${fmtPct(kpi.topRiser.growth)} growth` : '—'}
           </p>
         </div>
 
-        {/* Sort controls */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-500">Sort:</span>
-          {(['growth', 'revenue', 'state'] as SortKey[]).map(key => (
-            <button
-              key={key}
-              onClick={() => toggleSort(key)}
-              className={cn(
-                'text-xs px-2.5 py-1 rounded-md border transition-colors capitalize',
-                sortKey === key
-                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
-                  : 'border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600',
-              )}
-            >
-              {key === 'growth' ? 'Growth %' : key === 'revenue' ? 'Revenue' : 'State'}
-              {sortKey === key && (sortDir === 'desc' ? ' ↓' : ' ↑')}
-            </button>
-          ))}
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+          <p className="text-[10px] font-semibold text-amber-600 uppercase tracking-wider mb-2">Avg Growth</p>
+          <p className="text-2xl font-bold text-amber-700">{fmtPct(kpi.avgGrowth)}</p>
+          <p className="text-xs text-amber-500 mt-1">Mean phase growth</p>
         </div>
       </div>
 
-      {/* Cards grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-4">
-        {displayed.map((row, i) => (
-          <RiserCard key={row.store.store_id} rank={i + 1} row={row} />
-        ))}
-      </div>
-
-      {sorted.length > 12 && (
-        <div className="text-center">
-          <button
-            onClick={() => setShowAll(v => !v)}
-            className="text-xs text-gray-400 hover:text-emerald-400 border border-gray-700 hover:border-emerald-700 px-4 py-1.5 rounded-full transition-colors"
-          >
-            {showAll ? `Show top 12` : `Show all ${sorted.length} rising stores`}
-          </button>
+      {/* Click hint */}
+      {onNavigateToStore && (
+        <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg px-4 py-2.5">
+          <Info className="w-4 h-4 text-blue-400 shrink-0" />
+          <span className="text-xs text-blue-600">
+            Click any row to open that store's Journey Deep Dive
+          </span>
         </div>
       )}
 
-      {/* Momentum chart */}
-      {momentumTraces.length > 0 && fm.length > 1 && (
-        <div className="rounded-xl border border-gray-800 bg-gray-900 p-5">
-          <h3 className="text-sm font-semibold text-gray-300 mb-4">
-            Rising Momentum — Top 10 Store Trajectories
-          </h3>
+      {/* Dumbbell chart */}
+      {top15.length > 0 && (
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h3 className="text-sm font-semibold text-gray-700">Early → Recent Revenue Shift</h3>
+          <p className="text-xs text-gray-400 mt-0.5 mb-4">Top {top15.length} by recent revenue</p>
           <Plot
-            data={momentumTraces}
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            data={chartTraces as any}
             layout={{
               paper_bgcolor: 'rgba(0,0,0,0)',
               plot_bgcolor: 'rgba(0,0,0,0)',
-              height: 320,
-              margin: { l: 60, r: 20, t: 10, b: 60 },
-              font: { color: '#9ca3af', family: 'Inter, sans-serif', size: 11 },
+              height: Math.max(320, top15.length * 30 + 90),
+              margin: { l: 70, r: 20, t: 20, b: 60 },
+              font: { color: '#6b7280', family: 'Inter, sans-serif', size: 11 },
               xaxis: {
-                gridcolor: '#1f2937',
-                linecolor: '#374151',
-                tickcolor: '#374151',
-                tickangle: -30,
-                automargin: true,
-              },
-              yaxis: {
-                gridcolor: '#1f2937',
-                linecolor: '#374151',
-                tickcolor: '#374151',
+                gridcolor: '#f3f4f6',
+                linecolor: '#e5e7eb',
                 tickprefix: '₹',
                 tickformat: ',.0f',
+                automargin: true,
+                title: { text: 'Revenue (monthly avg)', font: { color: '#9ca3af', size: 11 } },
+              },
+              yaxis: {
+                gridcolor: '#f3f4f6',
+                linecolor: '#e5e7eb',
+                type: 'category' as const,
+                categoryorder: 'array' as const,
+                categoryarray: chartCategories,
                 automargin: true,
               },
               legend: {
                 bgcolor: 'rgba(0,0,0,0)',
-                font: { color: '#9ca3af', size: 10 },
+                font: { color: '#6b7280', size: 10 },
+                orientation: 'h' as const,
+                x: 0,
+                y: 1.08,
               },
-              hovermode: 'x unified' as const,
+              hovermode: 'closest' as const,
             }}
             config={{ displayModeBar: false, responsive: true }}
             style={{ width: '100%' }}
           />
         </div>
       )}
+
+      {/* Detail table */}
+      <div>
+        <div className="mb-3">
+          <h3 className="text-sm font-semibold text-gray-700">Rising Stars Detail</h3>
+          <p className="text-[11px] text-gray-400 mt-0.5">Click column headers to sort</p>
+        </div>
+        <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
+          <table className="w-full text-xs min-w-[700px]">
+            <thead>
+              <tr className="border-b border-gray-200 bg-gray-50">
+                {TABLE_COLS.map(({ key, label, align }) => (
+                  <th
+                    key={label}
+                    onClick={key ? () => toggleSort(key) : undefined}
+                    className={cn(
+                      'px-4 py-3 font-semibold uppercase tracking-wider whitespace-nowrap text-gray-500',
+                      align === 'left' ? 'text-left' : align === 'right' ? 'text-right' : 'text-center',
+                      key ? 'cursor-pointer hover:text-gray-800 select-none' : '',
+                      key && sortKey === key ? 'text-gray-800' : '',
+                    )}
+                  >
+                    {label}
+                    {key && sortKey === key && (
+                      <span className="ml-1">{sortDir === 'desc' ? '↓' : '↑'}</span>
+                    )}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((row, i) => (
+                <tr
+                  key={row.store.store_id}
+                  onClick={() => onNavigateToStore?.(row.store.store_id)}
+                  className={cn(
+                    'border-b border-gray-100 transition-colors',
+                    i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50',
+                    onNavigateToStore ? 'cursor-pointer hover:bg-emerald-50/40' : 'hover:bg-gray-50',
+                  )}
+                >
+                  <td className="px-4 py-2.5 font-semibold text-gray-800 whitespace-nowrap">
+                    {row.store.store_name ?? row.store.store_id}
+                  </td>
+                  <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">
+                    {row.store.state ?? '—'}
+                  </td>
+                  <td className="px-4 py-2.5 text-[11px] font-semibold text-blue-500">
+                    Recovering
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-gray-400 tabular-nums">
+                    {fmtInr(row.earlyAvg)}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-gray-700 font-medium tabular-nums">
+                    {fmtInr(row.recentAvg)}
+                  </td>
+                  <td className="px-4 py-2.5 text-right font-semibold text-emerald-600 tabular-nums">
+                    {fmtPct(row.growth)}
+                  </td>
+                  <td className="px-4 py-2.5 text-center text-gray-400 tabular-nums">
+                    {row.earlyRank}
+                  </td>
+                  <td className="px-4 py-2.5 text-center text-gray-600 tabular-nums">
+                    {row.recentRank}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-gray-600 tabular-nums">
+                    {row.health.toFixed(1)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   )
 }

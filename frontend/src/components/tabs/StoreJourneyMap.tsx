@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   motion,
   useMotionValue,
@@ -198,6 +199,7 @@ interface Props {
 
 export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
   const { stores, months } = useDataContext()
+  const navigate = useNavigate()
   const [activeJourney, setActiveJourney] = useState<Journey | null>(null)
   const [sortKey, setSortKey]             = useState<SortKey>('revenue')
   const [sortDir, setSortDir]             = useState<'asc' | 'desc'>('desc')
@@ -250,7 +252,7 @@ export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handlePlotClick = useCallback((event: any) => {
     const pt = event?.points?.[0]
-    if (!pt || !onNavigateToStore) return
+    if (!pt) return
 
     // Try customdata first; if absent, resolve via curveNumber + pointIndex
     let storeId = pt.customdata as string | undefined
@@ -264,8 +266,8 @@ export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
     }
     if (!storeId) return
 
-    if (lastClickedStoreRef.current === storeId) {
-      // Second click on the same bubble → navigate
+    if (lastClickedStoreRef.current === storeId && onNavigateToStore) {
+      // Second click on the same bubble → tab navigation
       onNavigateToStore(storeId)
       lastClickedStoreRef.current = null
       setHintStoreId(null)
@@ -281,6 +283,12 @@ export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
       }, 5000)
     }
   }, [classified, onNavigateToStore])
+
+  // Double-click on any bubble → navigate to /store/:storeId URL
+  const handlePlotDoubleClick = useCallback(() => {
+    const storeId = lastClickedStoreRef.current
+    if (storeId) navigate(`/store/${encodeURIComponent(storeId)}`)
+  }, [navigate])
 
   // ── Summary counts ─────────────────────────────────────────────────────────
   const counts = useMemo(() => {
@@ -336,7 +344,7 @@ export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
         },
         hovertemplate:
           '<b>%{text}</b><br>Early avg: ₹%{x:,.0f}<br>Recent avg: ₹%{y:,.0f}'
-          + (onNavigateToStore ? '<br><i style="color:#6b7280">Click once · click again → Deep Dive</i>' : '')
+          + '<br><i style="color:#6b7280">Click to select · double-click → Deep Dive</i>'
           + '<extra></extra>',
       }
     })
@@ -470,11 +478,9 @@ export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
               bubble size = total revenue · dashed line = no change
             </p>
           </div>
-          {onNavigateToStore && (
-            <span className="text-[11px] text-blue-500 bg-blue-50 border border-blue-100 rounded-full px-2.5 py-1 whitespace-nowrap shrink-0">
-              Click bubble once · click again → Deep Dive
-            </span>
-          )}
+          <span className="text-[11px] text-blue-500 bg-blue-50 border border-blue-100 rounded-full px-2.5 py-1 whitespace-nowrap shrink-0">
+            Click to select · double-click → Deep Dive
+          </span>
         </div>
 
         {scatterTraces.length > 0 ? (
@@ -513,8 +519,9 @@ export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
                   uirevision: 'constant',
                 }}
                 config={{ displayModeBar: false, responsive: true }}
-                style={{ width: '100%', cursor: onNavigateToStore ? 'pointer' : 'default' }}
+                style={{ width: '100%', cursor: 'pointer' }}
                 onClick={handlePlotClick}
+                onDoubleClick={handlePlotDoubleClick}
               />
 
             {/* Selection feedback banner */}
@@ -528,7 +535,7 @@ export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
               <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse shrink-0" />
               <span>
                 <span className="font-semibold">{hintStoreId}</span>
-                {hintStoreId && ' selected — click this bubble again to open in Store Deep Dive →'}
+                {hintStoreId && ' selected — double-click this bubble to open Store Deep Dive →'}
               </span>
             </motion.div>
           </>
