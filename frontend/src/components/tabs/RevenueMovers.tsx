@@ -11,18 +11,21 @@ import { cn } from '@/lib/utils'
 
 const Plot = createPlotlyComponent(Plotly)
 
-type TableSort = 'change' | 'pct' | 'thisRev' | 'name'
+type TableSort = 'change' | 'pct' | 'recentAvg' | 'name'
 type TableDir  = 'asc' | 'desc'
-type TopN      = 20 | 50 | 'all'
+type TopN      = 5 | 10
 
 interface MoverRow {
   store: StoreRecord
-  thisRev: number
-  lastRev: number
+  recentAvg: number
+  earlyAvg: number
   absChange: number
   pctChange: number | null
 }
 
+function phaseAvg(store: StoreRecord, ms: string[]) {
+  return ms.length ? ms.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0) / ms.length : 0
+}
 function fmtInr(n: number) {
   const abs = Math.abs(n)
   const sign = n < 0 ? '-' : ''
@@ -34,11 +37,9 @@ function fmtInr(n: number) {
 function fmtPct(n: number) {
   return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
 }
-
-const LIGHT_AXIS = {
-  gridcolor: '#f3f4f6',
-  linecolor: '#e5e7eb',
-  tickcolor: '#e5e7eb',
+function abbr(m: string) {
+  // "Jan-2024" → "Jan'24"
+  return m.replace(/-20(\d{2})$/, "'$1")
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
@@ -47,167 +48,227 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
   const { stores, months } = useDataContext()
   const [tableSort, setTableSort] = useState<TableSort>('change')
   const [tableDir,  setTableDir]  = useState<TableDir>('desc')
-  const [topN,      setTopN]      = useState<TopN>(20)
+  const [topN,      setTopN]      = useState<TopN>(5)
 
-  const { fm, thisMonth, lastMonth, gainers, losers, allMovers, maxAbsChange, netChange } =
-    useMemo(() => {
-      let fs: StoreRecord[] = stores
-      if (filters.state)    fs = fs.filter(s => s.state    === filters.state)
-      if (filters.category) fs = fs.filter(s => s.category === filters.category)
+  const {
+    earlyRange, recentRange,
+    gainers, losers, allMovers, maxAbsChange, netChange,
+    topGainer, topLoser, insufficient,
+  } = useMemo(() => {
+    let fs: StoreRecord[] = stores
+    if (filters.state)    fs = fs.filter(s => s.state    === filters.state)
+    if (filters.category) fs = fs.filter(s => s.category === filters.category)
 
-      let fm: string[] = months
-      if (filters.fromMonth) {
-        const i = months.indexOf(filters.fromMonth)
-        if (i >= 0) fm = fm.slice(i)
-      }
-      if (filters.toMonth) {
-        const i = months.indexOf(filters.toMonth)
-        if (i >= 0) fm = fm.slice(0, i + 1)
-      }
-
-      if (fm.length < 2) {
-        return { fm, thisMonth: null, lastMonth: null, gainers: [], losers: [], allMovers: [], maxAbsChange: 1, netChange: 0 }
-      }
-
-      const thisMonth = fm[fm.length - 1]
-      const lastMonth = fm[fm.length - 2]
-
-      const allMovers: MoverRow[] = fs.map(store => {
-        const thisRev  = store.monthly_sales[thisMonth] ?? 0
-        const lastRev  = store.monthly_sales[lastMonth] ?? 0
-        const absChange = thisRev - lastRev
-        const pctChange = lastRev > 0 ? absChange / lastRev * 100 : null
-        return { store, thisRev, lastRev, absChange, pctChange }
-      }).sort((a, b) => b.absChange - a.absChange)
-
-      const gainers      = allMovers.filter(m => m.absChange > 0)
-      const losers       = allMovers.filter(m => m.absChange < 0)
-      const maxAbsChange = Math.max(...allMovers.map(m => Math.abs(m.absChange)), 1)
-      const netChange    = allMovers.reduce((s, m) => s + m.absChange, 0)
-
-      return { fm, thisMonth, lastMonth, gainers, losers, allMovers, maxAbsChange, netChange }
-    }, [stores, months, filters])
-
-  // ── Slope chart — efficient: fixed trace count regardless of store volume ──
-  const slopeTraces = useMemo(() => {
-    if (!thisMonth || !lastMonth || allMovers.length === 0) return []
-
-    // Which stores to draw lines for
-    const byAbsChange = [...allMovers].sort((a, b) => Math.abs(b.absChange) - Math.abs(a.absChange))
-    const visible     = topN === 'all' ? allMovers : byAbsChange.slice(0, topN)
-
-    // How many to show with name/% labels
-    const labelCount  = topN === 20 ? 20 : 10
-    const labeled     = byAbsChange.slice(0, Math.min(labelCount, byAbsChange.length))
-
-    const visGainers  = visible.filter(m => m.absChange > 0)
-    const visLosers   = visible.filter(m => m.absChange < 0)
-    const visFlat     = visible.filter(m => m.absChange === 0)
-
-    // Build one set of x/y per colour using null separators — O(stores), not O(stores²) traces
-    function batchLines(rows: MoverRow[]): { x: (number | null)[]; y: (number | null)[] } {
-      const x: (number | null)[] = []
-      const y: (number | null)[] = []
-      for (const m of rows) { x.push(0, 1, null); y.push(m.lastRev, m.thisRev, null) }
-      return { x, y }
+    let fm: string[] = months
+    if (filters.fromMonth) {
+      const i = months.indexOf(filters.fromMonth)
+      if (i >= 0) fm = fm.slice(i)
+    }
+    if (filters.toMonth) {
+      const i = months.indexOf(filters.toMonth)
+      if (i >= 0) fm = fm.slice(0, i + 1)
     }
 
-    const lineOpacity = topN === 'all' ? 0.22 : topN === 50 ? 0.45 : 0.65
-    const lineWidth   = topN === 'all' ? 1    : topN === 50 ? 1.3  : 1.8
+    if (fm.length < 2) {
+      return {
+        earlyRange: '—', recentRange: '—',
+        gainers: [], losers: [], allMovers: [], maxAbsChange: 1, netChange: 0,
+        topGainer: null, topLoser: null, insufficient: true,
+      }
+    }
+
+    // Split into early and recent halves — same logic as RisingStars
+    const half   = Math.floor(fm.length / 2)
+    const early  = fm.slice(0, half)
+    const recent = fm.slice(half)
+
+    const earlyRange  = `${abbr(early[0])} – ${abbr(early[early.length - 1])}`
+    const recentRange = `${abbr(recent[0])} – ${abbr(recent[recent.length - 1])}`
+
+    const allMovers: MoverRow[] = fs
+      .map(store => {
+        const earlyAvg  = phaseAvg(store, early)
+        const recentAvg = phaseAvg(store, recent)
+        const absChange = recentAvg - earlyAvg
+        const pctChange = earlyAvg > 0 ? absChange / earlyAvg * 100 : null
+        return { store, recentAvg, earlyAvg, absChange, pctChange }
+      })
+      .filter(m => m.earlyAvg > 0 || m.recentAvg > 0)
+      .sort((a, b) => b.absChange - a.absChange)
+
+    const gainers      = allMovers.filter(m => m.absChange > 0)
+    const losers       = allMovers.filter(m => m.absChange < 0)
+    const maxAbsChange = Math.max(...allMovers.map(m => Math.abs(m.absChange)), 1)
+    const netChange    = allMovers.reduce((s, m) => s + m.absChange, 0)
+    const topGainer    = gainers[0] ?? null
+    const topLoser     = losers.length > 0
+      ? losers.reduce((w, m) => m.absChange < w.absChange ? m : w)
+      : null
+
+    return {
+      earlyRange, recentRange,
+      gainers, losers, allMovers, maxAbsChange, netChange,
+      topGainer, topLoser, insufficient: false,
+    }
+  }, [stores, months, filters])
+
+  // ── Slope chart traces ────────────────────────────────────────────────────
+  const slopeTraces = useMemo(() => {
+    if (allMovers.length === 0) return []
+
+    const topGainers = gainers.slice(0, topN)
+    const topLosers  = [...losers].sort((a, b) => a.absChange - b.absChange).slice(0, topN)
+    const showStores = [...topGainers, ...topLosers]
+    if (showStores.length === 0) return []
+
+    const maxAbs = Math.max(...showStores.map(m => Math.abs(m.absChange)), 1)
+    const maxRev = Math.max(...showStores.map(m => Math.max(m.recentAvg, m.earlyAvg)), 1)
+
+    // Colour scales: mint → deep emerald | blush → deep crimson
+    function lerpHex(c1: string, c2: string, t: number): string {
+      const p = (s: string, o: number) => parseInt(s.slice(o, o + 2), 16)
+      const r = Math.round(p(c1, 1) + (p(c2, 1) - p(c1, 1)) * t)
+      const g = Math.round(p(c1, 3) + (p(c2, 3) - p(c1, 3)) * t)
+      const b = Math.round(p(c1, 5) + (p(c2, 5) - p(c1, 5)) * t)
+      return `rgb(${r},${g},${b})`
+    }
+    const gColor = (mag: number) => lerpHex('#86efac', '#15803d', mag)
+    const lColor = (mag: number) => lerpHex('#fca5a5', '#b91c1c', mag)
 
     const traces: object[] = []
 
-    if (visGainers.length) traces.push({
-      type: 'scatter', mode: 'lines', name: 'Gainers',
-      ...batchLines(visGainers),
-      line: { color: '#10b981', width: lineWidth },
-      opacity: lineOpacity,
-      hoverinfo: 'none',
-    })
+    // ① Translucent delta-fill triangles (rendered behind lines)
+    for (const m of showStores) {
+      const isGainer = m.absChange > 0
+      const mag      = Math.abs(m.absChange) / maxAbs
+      traces.push({
+        type: 'scatter', mode: 'lines',
+        x: [0, 1, 1, 0],
+        y: [m.earlyAvg, m.recentAvg, m.earlyAvg, m.earlyAvg],
+        fill: 'toself',
+        fillcolor: isGainer
+          ? `rgba(16,185,129,${(0.04 + mag * 0.1).toFixed(2)})`
+          : `rgba(239,68,68,${(0.04 + mag * 0.1).toFixed(2)})`,
+        line: { color: 'rgba(0,0,0,0)', width: 0 },
+        showlegend: false,
+        hoverinfo: 'none',
+      })
+    }
 
-    if (visLosers.length) traces.push({
-      type: 'scatter', mode: 'lines', name: 'Losers',
-      ...batchLines(visLosers),
-      line: { color: '#ef4444', width: lineWidth },
-      opacity: lineOpacity,
-      hoverinfo: 'none',
-    })
+    // ② Spline lines — thickness, opacity, colour all scale with magnitude
+    for (const m of showStores) {
+      const isGainer = m.absChange > 0
+      const mag      = Math.abs(m.absChange) / maxAbs
+      traces.push({
+        type: 'scatter', mode: 'lines',
+        x: [0, 1],
+        y: [m.earlyAvg, m.recentAvg],
+        line: {
+          color:     isGainer ? gColor(mag) : lColor(mag),
+          width:     1.8 + mag * 3.2,          // 1.8 → 5 px
+          shape:     'spline',
+          smoothing: 1.2,
+        },
+        opacity: 0.55 + mag * 0.45,            // 0.55 → 1.0
+        showlegend: false,
+        hoverinfo: 'none',
+      })
+    }
 
-    if (visFlat.length) traces.push({
-      type: 'scatter', mode: 'lines', name: 'Flat',
-      ...batchLines(visFlat),
-      line: { color: '#9ca3af', width: 1 },
-      opacity: 0.2,
-      hoverinfo: 'none',
-    })
-
-    // All visible stores — right-end dots with hover tooltip
-    traces.push({
-      type: 'scatter', mode: 'markers',
-      name: thisMonth,
-      x: visible.map(() => 1),
-      y: visible.map(m => m.thisRev),
-      marker: {
-        size: 5,
-        color: visible.map(m => m.absChange > 0 ? '#10b981' : m.absChange < 0 ? '#ef4444' : '#9ca3af'),
-        opacity: 0.6,
-        line: { color: '#fff', width: 0.8 },
-      },
-      text: visible.map(m =>
-        `<b>${m.store.store_name ?? m.store.store_id}</b><br>` +
-        `${thisMonth}: ${fmtInr(m.thisRev)}<br>` +
-        `${lastMonth}: ${fmtInr(m.lastRev)}<br>` +
-        `Δ ${fmtInr(m.absChange)} (${fmtPct(m.pctChange ?? 0)})`
-      ),
-      hovertemplate: '%{text}<extra></extra>',
-      showlegend: false,
-    })
-
-    // Labeled stores — left dot + store name
+    // ③ Left dots — rank badge + store name + state (dot size ∝ early revenue)
+    const leftRows = [
+      ...topGainers.map((m, i) => ({ m, rank: i + 1, isGainer: true  })),
+      ...topLosers .map((m, i) => ({ m, rank: i + 1, isGainer: false })),
+    ]
     traces.push({
       type: 'scatter', mode: 'markers+text',
-      x: labeled.map(() => 0),
-      y: labeled.map(m => m.lastRev),
-      marker: { size: 7, color: '#9ca3af', line: { color: '#fff', width: 1 } },
-      text: labeled.map(m => `${m.store.store_name ?? m.store.store_id}  `),
+      x: leftRows.map(() => 0),
+      y: leftRows.map(({ m }) => m.earlyAvg),
+      marker: {
+        size:  leftRows.map(({ m }) => 7 + (m.earlyAvg / maxRev) * 7),
+        color: leftRows.map(({ m, isGainer }) => {
+          const mag = Math.abs(m.absChange) / maxAbs
+          return isGainer ? gColor(mag) : lColor(mag)
+        }),
+        line: { color: '#fff', width: 1.5 },
+      },
+      text: leftRows.map(({ m, rank, isGainer }) => {
+        const name  = (m.store.store_name ?? m.store.store_id).slice(0, 14)
+        const state = m.store.state ? ` · ${m.store.state}` : ''
+        return `${isGainer ? '▲' : '▼'}${rank} ${name}${state}  `
+      }),
       textposition: 'middle left',
-      textfont: { size: 9, color: '#6b7280' },
+      textfont: {
+        size:  9,
+        color: leftRows.map(({ isGainer }) => isGainer ? '#065f46' : '#7f1d1d'),
+      },
       showlegend: false,
       hoverinfo: 'none',
     })
 
-    // Labeled stores — right dot + % change badge
+    // ④ Right dots — % + recent revenue label + rich hover (dot size ∝ recent revenue)
     traces.push({
       type: 'scatter', mode: 'markers+text',
-      x: labeled.map(() => 1),
-      y: labeled.map(m => m.thisRev),
+      x: showStores.map(() => 1),
+      y: showStores.map(m => m.recentAvg),
       marker: {
-        size: 9,
-        color: labeled.map(m => m.absChange > 0 ? '#10b981' : m.absChange < 0 ? '#ef4444' : '#9ca3af'),
-        line: { color: '#fff', width: 1.2 },
+        size:  showStores.map(m => 8 + (m.recentAvg / maxRev) * 8),
+        color: showStores.map(m => {
+          const mag = Math.abs(m.absChange) / maxAbs
+          return m.absChange > 0 ? gColor(mag) : lColor(mag)
+        }),
+        line: { color: '#fff', width: 1.5 },
       },
-      text: labeled.map(m => `  ${fmtPct(m.pctChange ?? 0)}`),
+      text: showStores.map(m =>
+        `  ${fmtPct(m.pctChange ?? 0)}`
+      ),
       textposition: 'middle right',
       textfont: {
-        size: 9,
-        color: labeled.map(m => m.absChange > 0 ? '#059669' : m.absChange < 0 ? '#dc2626' : '#9ca3af'),
+        size:  9,
+        color: showStores.map(m => m.absChange > 0 ? '#059669' : '#dc2626'),
       },
+      customdata: showStores.map(m => [
+        m.store.store_name ?? m.store.store_id,
+        m.store.state ?? '—',
+        fmtInr(m.recentAvg),
+        fmtInr(m.earlyAvg),
+        fmtInr(m.absChange),
+        fmtPct(m.pctChange ?? 0),
+      ]),
+      hovertemplate:
+        '<b>%{customdata[0]}</b>  <i>%{customdata[1]}</i><br>' +
+        `Recent (${recentRange}): ` + '%{customdata[2]}<br>' +
+        `Early  (${earlyRange}): `  + '%{customdata[3]}<br>' +
+        'Avg Δ: %{customdata[4]}  (%{customdata[5]})<extra></extra>',
       showlegend: false,
-      hoverinfo: 'none',
+    })
+
+    // ⑤ Legend entries
+    traces.push({
+      type: 'scatter', mode: 'lines',
+      name: `▲ Gainers — top ${topGainers.length}`,
+      x: [null], y: [null],
+      line: { color: '#10b981', width: 3 },
+    })
+    traces.push({
+      type: 'scatter', mode: 'lines',
+      name: `▼ Losers — top ${topLosers.length}`,
+      x: [null], y: [null],
+      line: { color: '#ef4444', width: 3 },
     })
 
     return traces
-  }, [allMovers, topN, thisMonth, lastMonth])
+  }, [gainers, losers, topN, earlyRange, recentRange])
 
   // ── Table sort ────────────────────────────────────────────────────────────
   const sortedTable = useMemo(() => {
     return [...allMovers].sort((a, b) => {
-      if (tableSort === 'change')  return tableDir === 'desc' ? b.absChange - a.absChange : a.absChange - b.absChange
+      if (tableSort === 'change')    return tableDir === 'desc' ? b.absChange - a.absChange : a.absChange - b.absChange
       if (tableSort === 'pct') {
         const pa = a.pctChange ?? -Infinity, pb = b.pctChange ?? -Infinity
         return tableDir === 'desc' ? pb - pa : pa - pb
       }
-      if (tableSort === 'thisRev') return tableDir === 'desc' ? b.thisRev - a.thisRev : a.thisRev - b.thisRev
+      if (tableSort === 'recentAvg') return tableDir === 'desc' ? b.recentAvg - a.recentAvg : a.recentAvg - b.recentAvg
       const na = a.store.store_name ?? a.store.store_id
       const nb = b.store.store_name ?? b.store.store_id
       return tableDir === 'asc' ? na.localeCompare(nb) : nb.localeCompare(na)
@@ -219,19 +280,20 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
     else { setTableSort(key); setTableDir('desc') }
   }
 
-  if (!thisMonth || !lastMonth) {
+  if (insufficient) {
     return (
       <div className="flex items-center justify-center h-64 text-gray-500">
-        Need at least 2 months of data to compute MoM change.
+        Need at least 2 months of data to compute phase comparison.
       </div>
     )
   }
 
   const topNOptions: { value: TopN; label: string }[] = [
-    { value: 20,    label: 'Top 20' },
-    { value: 50,    label: 'Top 50' },
-    { value: 'all', label: `All ${allMovers.length}` },
+    { value: 5,  label: 'Top 5'  },
+    { value: 10, label: 'Top 10' },
   ]
+
+  const scopeLabel = filters.state ? filters.state : 'All India'
 
   return (
     <div className="space-y-6">
@@ -243,20 +305,26 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
           Revenue Movers
         </h2>
         <p className="text-sm text-gray-500 mt-1">
-          Month-on-month change:{' '}
-          <span className="text-gray-600 font-medium">{lastMonth}</span>{' → '}
-          <span className="text-gray-600 font-medium">{thisMonth}</span>
+          Phase comparison · Early{' '}
+          <span className="text-gray-600 font-medium">({earlyRange})</span>
+          {' vs '}
+          Recent <span className="text-gray-600 font-medium">({recentRange})</span>
+          {' · '}
+          <span className={cn('font-medium', filters.state ? 'text-blue-600' : 'text-gray-500')}>
+            {scopeLabel}
+          </span>
         </p>
       </div>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm flex items-start gap-3">
           <div className="mt-0.5"><ArrowUpRight className="w-4 h-4 text-emerald-500" /></div>
           <div>
             <p className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wider mb-1">Gainers</p>
             <p className="text-3xl font-bold text-gray-900 tabular-nums leading-tight">{gainers.length}</p>
-            <p className="text-xs text-emerald-600 mt-1">stores up MoM</p>
+            <p className="text-xs text-emerald-600 mt-1">stores grew phase-on-phase</p>
           </div>
         </div>
 
@@ -265,7 +333,7 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
           <div>
             <p className="text-[10px] font-semibold text-red-600 uppercase tracking-wider mb-1">Losers</p>
             <p className="text-3xl font-bold text-gray-900 tabular-nums leading-tight">{losers.length}</p>
-            <p className="text-xs text-red-500 mt-1">stores down MoM</p>
+            <p className="text-xs text-red-500 mt-1">stores fell phase-on-phase</p>
           </div>
         </div>
 
@@ -275,11 +343,13 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
         )}>
           <div className="mt-0.5"><Minus className="w-4 h-4 text-gray-400" /></div>
           <div>
-            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1">Net Change</p>
-            <p className={cn('text-2xl font-bold tabular-nums leading-tight', netChange >= 0 ? 'text-emerald-700' : 'text-red-700')}>
-              {fmtInr(netChange)}
+            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1">Net Direction</p>
+            <p className={cn('text-xl font-bold leading-tight', netChange >= 0 ? 'text-emerald-700' : 'text-red-700')}>
+              {netChange >= 0 ? 'Growing ↑' : 'Declining ↓'}
             </p>
-            <p className="text-xs text-gray-400 mt-1">{netChange >= 0 ? 'Net gain' : 'Net loss'}</p>
+            <p className="text-xs text-gray-400 mt-1">
+              {gainers.length} up · {losers.length} down
+            </p>
           </div>
         </div>
 
@@ -290,26 +360,62 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
             <p className="text-3xl font-bold text-gray-900 tabular-nums leading-tight">
               {allMovers.filter(m => m.absChange === 0).length}
             </p>
-            <p className="text-xs text-gray-400 mt-1">unchanged MoM</p>
+            <p className="text-xs text-gray-400 mt-1">unchanged</p>
           </div>
         </div>
+
       </div>
+
+      {/* Spotlight — biggest gainer & loser */}
+      {(topGainer || topLoser) && (
+        <div className="grid grid-cols-2 gap-3">
+          {topGainer && (
+            <div className="rounded-xl border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-white p-4 shadow-sm">
+              <p className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wider mb-2">
+                Biggest Gainer · {scopeLabel}
+              </p>
+              <p className="text-sm font-bold text-gray-900 truncate">
+                {topGainer.store.store_name ?? topGainer.store.store_id}
+              </p>
+              <p className="text-xs text-gray-400 mt-0.5">{topGainer.store.state ?? '—'}</p>
+              <p className="text-2xl font-bold text-emerald-600 mt-2 tabular-nums">
+                {fmtPct(topGainer.pctChange ?? 0)}
+              </p>
+              <p className="text-[10px] text-gray-400 mt-1">{earlyRange} → {recentRange}</p>
+            </div>
+          )}
+          {topLoser && (
+            <div className="rounded-xl border border-red-100 bg-gradient-to-br from-red-50 via-white to-white p-4 shadow-sm">
+              <p className="text-[10px] font-semibold text-red-600 uppercase tracking-wider mb-2">
+                Biggest Loser · {scopeLabel}
+              </p>
+              <p className="text-sm font-bold text-gray-900 truncate">
+                {topLoser.store.store_name ?? topLoser.store.store_id}
+              </p>
+              <p className="text-xs text-gray-400 mt-0.5">{topLoser.store.state ?? '—'}</p>
+              <p className="text-2xl font-bold text-red-500 mt-2 tabular-nums">
+                {fmtPct(topLoser.pctChange ?? 0)}
+              </p>
+              <p className="text-[10px] text-gray-400 mt-1">{earlyRange} → {recentRange}</p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Slope Chart */}
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        {/* Chart header + toggle */}
-        <div className="flex items-start justify-between gap-4 mb-1">
+
+        <div className="flex items-start justify-between gap-4 mb-4">
           <div>
-            <h3 className="text-sm font-semibold text-gray-700">Revenue Slope — {lastMonth} → {thisMonth}</h3>
+            <h3 className="text-sm font-semibold text-gray-700">
+              Phase Revenue Slope — {scopeLabel}
+            </h3>
             <p className="text-xs text-gray-400 mt-0.5">
-              Each line is a store.{' '}
-              <span className="text-emerald-600 font-medium">Green rising</span> = gainer,{' '}
-              <span className="text-red-500 font-medium">red falling</span> = loser.
-              Hover any dot for details.
+              Top N <span className="text-emerald-600 font-medium">gainers</span> &amp;{' '}
+              <span className="text-red-500 font-medium">losers</span> by avg monthly revenue shift ·
+              Thicker + darker line = bigger move · Dot size = revenue scale · Hover for details.
             </p>
           </div>
-
-          {/* Top N toggle */}
           <div className="flex items-center gap-1 shrink-0">
             {topNOptions.map(opt => (
               <button
@@ -328,46 +434,45 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
           </div>
         </div>
 
-        {/* Context hint for "All" */}
-        {topN === 'all' && (
-          <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-100 rounded px-2 py-1 mt-2 mb-2">
-            Showing all {allMovers.length} stores — lines are thin &amp; translucent; top 10 movers labeled.
-            Hover dots for store details.
-          </p>
-        )}
-
         <Plot
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           data={slopeTraces as any}
           layout={{
             paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor:  'rgba(0,0,0,0)',
-            height: 520,
-            margin: { l: 160, r: 110, t: 30, b: 40 },
+            plot_bgcolor:  'rgba(249,250,251,0.6)',
+            height: topN === 5 ? 430 : 540,
+            margin: { l: 260, r: 120, t: 44, b: 50 },
             font: { color: '#6b7280', family: 'Inter, sans-serif', size: 11 },
             xaxis: {
               tickvals: [0, 1],
-              ticktext: [lastMonth ?? '', thisMonth ?? ''],
+              ticktext: [
+                `Early Phase<br><i style="color:#9ca3af;font-size:10px">${earlyRange}</i>`,
+                `Recent Phase<br><i style="color:#9ca3af;font-size:10px">${recentRange}</i>`,
+              ],
               range: [-0.05, 1.05],
               fixedrange: true,
               showgrid: false,
               linecolor: '#e5e7eb',
               zeroline: false,
-              tickfont: { size: 12, color: '#374151' },
+              tickfont: { size: 12, color: '#111827', family: 'Inter, sans-serif' },
+              ticklen: 0,
             },
             yaxis: {
-              ...LIGHT_AXIS,
-              tickprefix: '₹',
-              tickformat: ',.0f',
-              automargin: true,
-              title: { text: 'Revenue', font: { color: '#9ca3af', size: 11 } },
+              gridcolor: '#f3f4f6',
+              linecolor: 'rgba(0,0,0,0)',
+              tickcolor: 'rgba(0,0,0,0)',
+              showticklabels: false,
+              automargin: false,
+              title: { text: '' },
             },
             legend: {
-              bgcolor: 'rgba(0,0,0,0)',
+              bgcolor: 'rgba(255,255,255,0.85)',
+              bordercolor: '#f3f4f6',
+              borderwidth: 1,
               font: { color: '#6b7280', size: 10 },
               orientation: 'h',
               x: 0,
-              y: 1.04,
+              y: 1.08,
             },
             hovermode: 'closest',
           }}
@@ -376,20 +481,21 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
         />
       </div>
 
-      {/* Full ranked table */}
+      {/* Full phase ranking table */}
       <div>
         <div className="mb-3 flex items-center justify-between">
           <div>
             <h3 className="text-sm font-semibold text-gray-700">
-              Full MoM Ranking — all {allMovers.length} stores
+              Full Phase Ranking — {allMovers.length} stores
+              {filters.state && <span className="text-blue-600"> · {filters.state}</span>}
             </h3>
             <p className="text-[11px] text-gray-400 mt-0.5">Click column headers to sort</p>
           </div>
-          <span className="text-xs text-gray-400">{thisMonth} vs {lastMonth}</span>
+          <span className="text-xs text-gray-400">{earlyRange} vs {recentRange}</span>
         </div>
 
         <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
-          <table className="w-full text-xs min-w-[640px]">
+          <table className="w-full text-xs min-w-[660px]">
             <thead>
               <tr className="border-b border-gray-200 bg-gray-50">
                 <th className="px-4 py-3 text-left font-semibold uppercase tracking-wider text-gray-500 w-8">#</th>
@@ -401,17 +507,19 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
                 </th>
                 <th className="px-3 py-3 text-left font-semibold uppercase tracking-wider text-gray-500 hidden sm:table-cell">State</th>
                 <th
-                  className={cn('px-3 py-3 text-right font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap', tableSort === 'thisRev' ? 'text-gray-800' : 'text-gray-500 hover:text-gray-800')}
-                  onClick={() => toggleTable('thisRev')}
+                  className={cn('px-3 py-3 text-right font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap', tableSort === 'recentAvg' ? 'text-gray-800' : 'text-gray-500 hover:text-gray-800')}
+                  onClick={() => toggleTable('recentAvg')}
                 >
-                  {thisMonth} {tableSort === 'thisRev' && (tableDir === 'desc' ? '↓' : '↑')}
+                  Recent Avg {tableSort === 'recentAvg' && (tableDir === 'desc' ? '↓' : '↑')}
                 </th>
-                <th className="px-3 py-3 text-right font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap">{lastMonth}</th>
+                <th className="px-3 py-3 text-right font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap">
+                  Early Avg
+                </th>
                 <th
                   className={cn('px-3 py-3 text-right font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap', tableSort === 'change' ? 'text-gray-800' : 'text-gray-500 hover:text-gray-800')}
                   onClick={() => toggleTable('change')}
                 >
-                  Δ Abs {tableSort === 'change' && (tableDir === 'desc' ? '↓' : '↑')}
+                  Δ Avg {tableSort === 'change' && (tableDir === 'desc' ? '↓' : '↑')}
                 </th>
                 <th
                   className={cn('px-3 py-3 text-right font-semibold uppercase tracking-wider cursor-pointer select-none hidden md:table-cell whitespace-nowrap', tableSort === 'pct' ? 'text-gray-800' : 'text-gray-500 hover:text-gray-800')}
@@ -419,7 +527,9 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
                 >
                   Δ % {tableSort === 'pct' && (tableDir === 'desc' ? '↓' : '↑')}
                 </th>
-                <th className="px-3 py-3 text-left font-semibold uppercase tracking-wider text-gray-500 hidden lg:table-cell w-28">Bar</th>
+                <th className="px-3 py-3 text-left font-semibold uppercase tracking-wider text-gray-500 hidden lg:table-cell w-28">
+                  Bar
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -430,25 +540,44 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
                 return (
                   <tr
                     key={row.store.store_id}
-                    className={cn('border-b border-gray-100 transition-colors', i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50', 'hover:bg-gray-50')}
+                    className={cn(
+                      'border-b border-gray-100 transition-colors',
+                      i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50',
+                      'hover:bg-gray-50',
+                    )}
                   >
                     <td className="px-4 py-2 text-gray-400">{i + 1}</td>
                     <td className="px-3 py-2 font-semibold text-gray-800 max-w-[140px] truncate">
                       {row.store.store_name ?? row.store.store_id}
                     </td>
-                    <td className="px-3 py-2 text-gray-500 hidden sm:table-cell">{row.store.state ?? '—'}</td>
-                    <td className="px-3 py-2 text-right text-gray-700 font-medium tabular-nums">{fmtInr(row.thisRev)}</td>
-                    <td className="px-3 py-2 text-right text-gray-400 tabular-nums">{fmtInr(row.lastRev)}</td>
-                    <td className={cn('px-3 py-2 text-right font-semibold tabular-nums', isGainer ? 'text-emerald-600' : isLoser ? 'text-red-500' : 'text-gray-400')}>
+                    <td className="px-3 py-2 text-gray-500 hidden sm:table-cell">
+                      {row.store.state ?? '—'}
+                    </td>
+                    <td className="px-3 py-2 text-right text-gray-700 font-medium tabular-nums">
+                      {fmtInr(row.recentAvg)}
+                    </td>
+                    <td className="px-3 py-2 text-right text-gray-400 tabular-nums">
+                      {fmtInr(row.earlyAvg)}
+                    </td>
+                    <td className={cn(
+                      'px-3 py-2 text-right font-semibold tabular-nums',
+                      isGainer ? 'text-emerald-600' : isLoser ? 'text-red-500' : 'text-gray-400',
+                    )}>
                       <span className="mr-0.5">{isGainer ? '▲' : isLoser ? '▼' : '—'}</span>
                       {fmtInr(Math.abs(row.absChange))}
                     </td>
-                    <td className={cn('px-3 py-2 text-right tabular-nums hidden md:table-cell', isGainer ? 'text-emerald-500' : isLoser ? 'text-red-400' : 'text-gray-400')}>
+                    <td className={cn(
+                      'px-3 py-2 text-right tabular-nums hidden md:table-cell',
+                      isGainer ? 'text-emerald-500' : isLoser ? 'text-red-400' : 'text-gray-400',
+                    )}>
                       {row.pctChange !== null ? fmtPct(row.pctChange) : '—'}
                     </td>
                     <td className="px-3 py-2 hidden lg:table-cell">
                       <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden w-full">
-                        <div className={cn('h-full rounded-full', isGainer ? 'bg-emerald-500' : 'bg-red-500')} style={{ width: `${barW}%` }} />
+                        <div
+                          className={cn('h-full rounded-full', isGainer ? 'bg-emerald-500' : 'bg-red-500')}
+                          style={{ width: `${barW}%` }}
+                        />
                       </div>
                     </td>
                   </tr>

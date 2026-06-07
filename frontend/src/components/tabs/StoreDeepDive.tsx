@@ -384,26 +384,51 @@ interface Props { filters: FilterState; initialStoreId?: string | null }
 export default function StoreDeepDive({ filters, initialStoreId }: Props) {
   const { stores, months } = useDataContext()
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const lastFilterKey = useRef('')
   const autoSelected = useRef(false)
+  const filtersRef = useRef(filters)
+  filtersRef.current = filters
 
-  // Auto-select the highest-revenue store on first load
+  // Stores narrowed by the global state + category filters
+  const filteredStores = useMemo(() => {
+    let result = stores
+    if (filters.state)    result = result.filter(s => s.state    === filters.state)
+    if (filters.category) result = result.filter(s => s.category === filters.category)
+    return result
+  }, [stores, filters.state, filters.category])
+
+  // Auto-select highest-revenue store; re-runs when state/category filter changes
   useEffect(() => {
-    if (autoSelected.current) return
-    if (initialStoreId) {
+    const { state, category } = filtersRef.current
+    const filterKey = `${state}|${category}`
+    const filtersChanged = lastFilterKey.current !== filterKey
+    lastFilterKey.current = filterKey
+
+    // Nothing changed and already selected — keep current selection
+    if (!filtersChanged && autoSelected.current) return
+
+    // Navigate-to-store from another tab (initial load, no filter change)
+    if (initialStoreId && !filtersChanged && !autoSelected.current) {
       setSelectedId(initialStoreId)
       autoSelected.current = true
       return
     }
-    if (stores.length > 0) {
-      const top = [...stores].sort((a, b) => {
+
+    // Auto-select highest-revenue store from the filtered list
+    if (filteredStores.length > 0) {
+      const top = [...filteredStores].sort((a, b) => {
         const aRev = Object.values(a.monthly_sales).reduce((s, v) => s + v, 0)
         const bRev = Object.values(b.monthly_sales).reduce((s, v) => s + v, 0)
         return bRev - aRev
       })[0]
       setSelectedId(top.store_id)
       autoSelected.current = true
+    } else {
+      setSelectedId(null)
     }
-  }, [stores, initialStoreId])
+  // filteredStores already encodes filters.state + filters.category
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredStores, initialStoreId])
 
   const fm = useMemo(() => {
     let m = months
@@ -494,7 +519,7 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
   // ── Empty / loading state ─────────────────────────────────────────────────
 
   if (!selectedStore || !derived) {
-    const topStores = [...stores]
+    const topStores = [...filteredStores]
       .sort((a, b) => {
         const aRev = Object.values(a.monthly_sales).reduce((s, v) => s + v, 0)
         const bRev = Object.values(b.monthly_sales).reduce((s, v) => s + v, 0)
@@ -515,7 +540,7 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
               Full analytical profile, rank journey, health score and recommended actions
             </p>
           </div>
-          <StoreSelector stores={stores} selectedId={null} onSelect={setSelectedId} />
+          <StoreSelector stores={filteredStores} selectedId={null} onSelect={setSelectedId} />
         </motion.div>
 
         {topStores.length > 0 ? (
@@ -627,7 +652,7 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
           </p>
         </div>
         <StoreSelector
-          stores={stores} selectedId={selectedId}
+          stores={filteredStores} selectedId={selectedId}
           selectedLabel={selectorLabel} onSelect={setSelectedId}
         />
       </motion.div>

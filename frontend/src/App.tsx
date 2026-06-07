@@ -23,20 +23,22 @@ import FallenStars from './components/tabs/FallenStars'
 import RevenueMovers from './components/tabs/RevenueMovers'
 import StoreDeepDive from './components/tabs/StoreDeepDive'
 import TargetCommandCenter from './components/tabs/TargetCommandCenter'
+import StateJourneyAnalysis from './components/tabs/StateJourneyAnalysis'
 import { cn } from './lib/utils'
 
 // ── Tab registry ──────────────────────────────────────────────────────────────
 
 const TABS = [
-  { id: 'executive',       label: 'Executive Overview' },
-  { id: 'monthly-revenue', label: 'Monthly Revenue' },
-  { id: 'store-journey',   label: 'Store Journey Map' },
-  { id: 'geo',             label: 'Geo Analytics' },
-  { id: 'rising-stars',    label: 'Rising Stars' },
-  { id: 'fallen-stars',    label: 'Fallen Stars' },
-  { id: 'revenue-movers',  label: 'Revenue Movers' },
-  { id: 'store-deep-dive', label: 'Store Deep Dive' },
-  { id: 'target-command',  label: 'Target Command Center' },
+  { id: 'executive',          label: 'Executive Overview' },
+  { id: 'monthly-revenue',    label: 'Monthly Revenue' },
+  { id: 'store-journey',      label: 'Store Journey Map' },
+  { id: 'state-journey',      label: 'State Journey Analysis' },
+  { id: 'geo',                label: 'Geo Analytics' },
+  { id: 'rising-stars',       label: 'Rising Stars' },
+  { id: 'fallen-stars',       label: 'Fallen Stars' },
+  { id: 'revenue-movers',     label: 'Revenue Movers' },
+  { id: 'store-deep-dive',    label: 'Store Deep Dive' },
+  { id: 'target-command',     label: 'Target Command Center' },
 ] as const
 
 type TabId = typeof TABS[number]['id']
@@ -360,8 +362,10 @@ export default function App() {
                 ? <MonthlyRevenue filters={filters} />
                 : activeTab === 'store-journey'
                   ? <StoreJourneyMap filters={filters} onNavigateToStore={handleNavigateToStore} />
-                  : activeTab === 'geo'
-                    ? <GeoAnalytics filters={filters} />
+                  : activeTab === 'state-journey'
+                    ? <StateJourneyAnalysis filters={filters} />
+                    : activeTab === 'geo'
+                      ? <GeoAnalytics filters={filters} />
                     : activeTab === 'rising-stars'
                       ? <RisingStars filters={filters} onNavigateToStore={handleNavigateToStore} />
                       : activeTab === 'fallen-stars'
