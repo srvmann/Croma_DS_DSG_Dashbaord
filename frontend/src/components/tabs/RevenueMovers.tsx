@@ -7,6 +7,7 @@ import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
+import { allocatePhases } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
 
 const Plot = createPlotlyComponent(Plotly)
@@ -22,6 +23,7 @@ interface MoverRow {
   absChange: number
   pctChange: number | null
 }
+
 
 function phaseAvg(store: StoreRecord, ms: string[]) {
   return ms.length ? ms.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0) / ms.length : 0
@@ -77,10 +79,7 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
       }
     }
 
-    // Split into early and recent halves — same logic as RisingStars
-    const half   = Math.floor(fm.length / 2)
-    const early  = fm.slice(0, half)
-    const recent = fm.slice(half)
+    const { earlyMonths: early, recentMonths: recent } = allocatePhases(fm)
 
     const earlyRange  = `${abbr(early[0])} – ${abbr(early[early.length - 1])}`
     const recentRange = `${abbr(recent[0])} – ${abbr(recent[recent.length - 1])}`
@@ -302,10 +301,10 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
       <div>
         <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
           <BarChart2 className="w-5 h-5 text-blue-500" />
-          Revenue Movers
+          Biggest Revenue Swings
         </h2>
         <p className="text-sm text-gray-500 mt-1">
-          Phase comparison · Early{' '}
+          Ranks stores by absolute change in average monthly revenue · Early{' '}
           <span className="text-gray-600 font-medium">({earlyRange})</span>
           {' vs '}
           Recent <span className="text-gray-600 font-medium">({recentRange})</span>

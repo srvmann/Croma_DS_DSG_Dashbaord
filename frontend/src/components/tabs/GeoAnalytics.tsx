@@ -6,6 +6,7 @@ import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
+import { allocatePhases } from '@/lib/classificationEngine'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -81,17 +82,6 @@ const panelSpring = {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function halve(months: string[]): { early: string[]; recent: string[] } {
-  const n = months.length
-  if (n === 0) return { early: [], recent: [] }
-  if (n === 1) return { early: [], recent: months }
-  const half = Math.floor(n / 2)
-  return {
-    early:  months.slice(0, half),
-    recent: n % 2 === 0 ? months.slice(half) : months.slice(half + 1),
-  }
-}
-
 function winRev(store: StoreRecord, months: string[]): number {
   return months.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
 }
@@ -176,15 +166,15 @@ export default function GeoAnalytics({ filters }: Props) {
   }, [geojson, featureidkey])
 
   // ── Filtered stores + months ───────────────────────────────────────────────
-  const { fs, fm, early, recent } = useMemo(() => {
+  const { fs, fm, early, mid, recent } = useMemo(() => {
     let fs = stores
     if (filters.state)    fs = fs.filter(s => s.state    === filters.state)
     if (filters.category) fs = fs.filter(s => s.category === filters.category)
     let fm = months
     if (filters.fromMonth) { const i = months.indexOf(filters.fromMonth); if (i >= 0) fm = fm.slice(i) }
     if (filters.toMonth)   { const i = months.indexOf(filters.toMonth);   if (i >= 0) fm = fm.slice(0, i + 1) }
-    const { early, recent } = halve(fm)
-    return { fs, fm, early, recent }
+    const { earlyMonths: early, midMonths: mid, recentMonths: recent } = allocatePhases(fm)
+    return { fs, fm, early, mid, recent }
   }, [stores, months, filters])
 
   // ── Per-state aggregations ─────────────────────────────────────────────────
@@ -329,10 +319,12 @@ export default function GeoAnalytics({ filters }: Props) {
       {/* Header */}
       <div className="flex items-start justify-between gap-4 px-5 pt-4 pb-3 border-b border-gray-100">
         <div>
-          <h2 className="text-sm font-bold text-gray-900">India Geographic Store Journey</h2>
+          <h2 className="text-sm font-bold text-gray-900">Growth Heat Map — India</h2>
           <p className="text-[11px] text-gray-500 mt-0.5 leading-relaxed max-w-lg">
-            Where growth is happening and where intervention is required.
-            Choropleth shades each state; bubbles sized by store count and coloured by direction.
+            States shaded by early→recent growth — <span className="text-emerald-600">green</span> = gaining momentum,
+            <span className="text-red-500"> red</span> = losing ground.
+            {mid.length > 0 ? ` Mid phase: ${mid[0]}${mid.length > 1 ? `–${mid[mid.length - 1]}` : ''}. ` : ' '}
+            Bubble size = store count. Click a state to inspect its stores.
           </p>
         </div>
         {selectedState && (

@@ -15,6 +15,7 @@ Generic endpoints (file-explorer, kept for compatibility):
   GET  /api/analysis/{sheet_name}
 """
 
+import json
 import logging
 import os
 import shutil
@@ -26,6 +27,7 @@ from pydantic import BaseModel
 
 from parser import (
     analyze_sheet,
+    detect_month_from_filename,
     get_sheet_data,
     get_sheets,
     parse_sales,
@@ -51,6 +53,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 SALES_FILE = os.path.join(DATA_DIR, "sales.xlsx")
 TARGETS_FILE = os.path.join(DATA_DIR, "targets.xlsx")
+TARGETS_META_FILE = os.path.join(DATA_DIR, "targets_meta.json")
 
 # Used only by the generic /api/upload → /api/data/{sheet} flow
 _uploaded_file: str | None = None
@@ -207,14 +210,31 @@ async def upload_sales(file: UploadFile = File(...)):
 async def upload_targets(file: UploadFile = File(...)):
     """Save targets XLSX and return a summary."""
     _validate_excel(file)
+    original_name = file.filename or ""
     _save(file, TARGETS_FILE)
+
+    # Persist original filename so we can detect the target month later
+    target_month = detect_month_from_filename(original_name)
+    with open(TARGETS_META_FILE, "w") as f:
+        json.dump({"original_filename": original_name, "target_month": target_month}, f)
 
     try:
         targets = parse_targets(TARGETS_FILE)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Parse error: {exc}") from exc
 
-    return {"ok": True, "stores": len(targets)}
+    return {"ok": True, "stores": len(targets), "target_month": target_month}
+
+
+def _read_target_month() -> str | None:
+    """Return the stored target month (e.g. 'Jun-2026'), or None if not available."""
+    if not os.path.exists(TARGETS_META_FILE):
+        return None
+    try:
+        with open(TARGETS_META_FILE) as f:
+            return json.load(f).get("target_month")
+    except Exception:
+        return None
 
 
 @app.get("/api/data")
@@ -242,7 +262,7 @@ def get_dashboard_data():
         raise HTTPException(status_code=500, detail=f"Failed to read sales data: {exc}") from exc
 
     has_targets = os.path.exists(TARGETS_FILE)
-    targets: dict[str, float] = {}
+    targets: dict[str, dict] = {}
     warnings: list[str] = []
 
     if has_targets:
@@ -256,13 +276,20 @@ def get_dashboard_data():
             logger.warning("Targets file could not be processed: %s", exc)
             has_targets = False
 
-    # Attach per-store target (None if not in targets file)
+    # Attach per-store target and metadata from targets file
     for store in stores:
-        store["target"] = targets.get(store["store_id"])
+        t = targets.get(store["store_id"], {})
+        store["target"]          = t.get("target")
+        store["zonal_manager"]   = t.get("zonal_manager", "")
+        store["cluster_manager"] = t.get("cluster_manager", "")
+        # Use store name from targets file if sales file didn't provide one
+        if not store.get("store_name") and t.get("store_name"):
+            store["store_name"] = t["store_name"]
 
     months = _extract_months(stores)
     states = sorted({s["state"] for s in stores if s["state"]})
     categories = sorted({s["category"] for s in stores if s["category"]})
+    target_month = _read_target_month() if has_targets else None
 
     return {
         "no_data": False,
@@ -271,6 +298,7 @@ def get_dashboard_data():
         "states": states,
         "categories": categories,
         "has_targets": has_targets,
+        "target_month": target_month,
         "warnings": warnings,
     }
 
@@ -292,7 +320,12 @@ def get_store_detail(store_id: str):
 
     if os.path.exists(TARGETS_FILE):
         try:
-            store["target"] = parse_targets(TARGETS_FILE).get(store_id)
+            t = parse_targets(TARGETS_FILE).get(store_id, {})
+            store["target"]          = t.get("target")
+            store["zonal_manager"]   = t.get("zonal_manager", "")
+            store["cluster_manager"] = t.get("cluster_manager", "")
+            if not store.get("store_name") and t.get("store_name"):
+                store["store_name"] = t["store_name"]
         except Exception:
             store["target"] = None
     else:

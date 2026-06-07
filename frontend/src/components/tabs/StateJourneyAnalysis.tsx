@@ -11,6 +11,7 @@ import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
+import { allocatePhases } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
 
 const Plot = createPlotlyComponent(Plotly)
@@ -54,16 +55,6 @@ const PLOTLY_BASE = {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function halve(months: string[]): { early: string[]; recent: string[] } {
-  const n = months.length
-  if (n === 0) return { early: [], recent: [] }
-  if (n === 1) return { early: [], recent: months }
-  const half = Math.floor(n / 2)
-  return {
-    early:  months.slice(0, half),
-    recent: n % 2 === 0 ? months.slice(half) : months.slice(half + 1),
-  }
-}
 
 function mAvg(store: StoreRecord, months: string[]): number {
   if (!months.length) return 0
@@ -304,7 +295,7 @@ export default function StateJourneyAnalysis({ filters }: Props) {
   const [compState, setCompState] = useState<string | null>(null)
 
   // ── Filter + split (state filter intentionally ignored) ────────────────────
-  const { fs, fm, early, recent } = useMemo(() => {
+  const { fs, fm, early, mid, recent } = useMemo(() => {
     let fs = stores
     if (filters.category) fs = fs.filter(s => s.category === filters.category)
 
@@ -318,8 +309,8 @@ export default function StateJourneyAnalysis({ filters }: Props) {
       if (i >= 0) fm = fm.slice(0, i + 1)
     }
 
-    const { early, recent } = halve(fm)
-    return { fs, fm, early, recent }
+    const { earlyMonths: early, midMonths: mid, recentMonths: recent } = allocatePhases(fm)
+    return { fs, fm, early, mid, recent }
   }, [stores, months, filters])
 
   // ── Per-store classification ───────────────────────────────────────────────
@@ -640,9 +631,9 @@ export default function StateJourneyAnalysis({ filters }: Props) {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.35, ease: 'easeOut' }}
       >
-        <h2 className="text-base font-bold text-gray-900">State Journey Analysis</h2>
+        <h2 className="text-base font-bold text-gray-900">State Health &amp; Risk</h2>
         <p className="text-[11px] text-gray-500 mt-0.5">
-          {kpis.statesInScope} states in scope · revenue, store journey funnel, risk &amp; opportunity by geography
+          {kpis.statesInScope} states · revenue trajectory{mid.length > 0 ? `, mid ${mid[0]}–${mid[mid.length - 1]}` : ''} · store journey funnel, health score, risk &amp; growth opportunity by geography
         </p>
       </motion.div>
 

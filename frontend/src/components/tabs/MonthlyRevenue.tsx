@@ -6,6 +6,7 @@ import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import { cn } from '@/lib/utils'
+import { allocatePhases } from '@/lib/classificationEngine'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -41,16 +42,12 @@ function fmtPct(n: number): string {
   return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
 }
 
-function halve(months: string[]): { early: string[]; recent: string[] } {
-  const n = months.length
-  if (n === 0) return { early: [], recent: [] }
-  if (n === 1) return { early: [], recent: months }
-  const half = Math.floor(n / 2)
-  return {
-    early:  months.slice(0, half),
-    recent: n % 2 === 0 ? months.slice(half) : months.slice(half + 1),
-  }
-}
+// Phase colours — used consistently on bars and insight cards
+const PHASE_COLOR = {
+  early:  '#94a3b8',  // slate-400
+  mid:    '#818cf8',  // indigo-400
+  recent: '#3b82f6',  // blue-500
+} as const
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -76,79 +73,92 @@ export default function MonthlyRevenue({ filters }: Props) {
     return { fs, fm }
   }, [stores, months, filters])
 
-  const { early, recent } = useMemo(() => halve(fm), [fm])
+  const { earlyMonths: early, midMonths: mid, recentMonths: recent } = useMemo(() => allocatePhases(fm), [fm])
+
+  const phaseOf = (m: string) => early.includes(m) ? 'early' : mid.includes(m) ? 'mid' : 'recent'
 
   // ── Per-month aggregates ───────────────────────────────────────────────────
   const monthlyData = useMemo(() => fm.map(m => {
     const rev    = fs.reduce((s, st) => s + (st.monthly_sales[m] ?? 0), 0)
     const active = fs.filter(st => (st.monthly_sales[m] ?? 0) > 0).length
-    return { m, rev, active, isRecent: recent.includes(m) }
-  }), [fs, fm, recent])
+    const phase  = phaseOf(m)
+    return { m, rev, active, phase }
+  }), [fs, fm, early, mid, recent]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── KPI metrics ────────────────────────────────────────────────────────────
   const kpis = useMemo(() => {
     if (!monthlyData.length) return null
 
-    const totalRev   = monthlyData.reduce((s, d) => s + d.rev, 0)
-    const sorted     = [...monthlyData].sort((a, b) => b.rev - a.rev)
-    const peak       = sorted[0]
-    const trough     = sorted[sorted.length - 1]
+    const sorted  = [...monthlyData].sort((a, b) => b.rev - a.rev)
+    const peak    = sorted[0]
+    const trough  = sorted[sorted.length - 1]
 
-    const earlyRevs  = monthlyData.filter(d => !d.isRecent).map(d => d.rev)
-    const recentRevs = monthlyData.filter(d =>  d.isRecent).map(d => d.rev)
-    const avgEarly   = earlyRevs.length  ? earlyRevs.reduce((s, v)  => s + v, 0) / earlyRevs.length  : 0
-    const avgRecent  = recentRevs.length ? recentRevs.reduce((s, v) => s + v, 0) / recentRevs.length : 0
+    const avg = (phase: string) => {
+      const rows = monthlyData.filter(d => d.phase === phase)
+      return rows.length ? rows.reduce((s, d) => s + d.rev, 0) / rows.length : 0
+    }
+    const avgEarly  = avg('early')
+    const avgMid    = avg('mid')
+    const avgRecent = avg('recent')
     const runRatePct = avgEarly > 0 ? (avgRecent - avgEarly) / avgEarly * 100 : 0
+    const midShiftPct = avgEarly > 0 && mid.length > 0 ? (avgMid - avgEarly) / avgEarly * 100 : null
 
-    const avgActive    = monthlyData.reduce((s, d) => s + d.active, 0) / monthlyData.length
     const firstActive  = monthlyData[0].active
     const lastActive   = monthlyData[monthlyData.length - 1].active
     const footprintPct = firstActive > 0 ? (lastActive - firstActive) / firstActive * 100 : 0
 
-    return {
-      totalRev, peak, trough,
-      avgEarly, avgRecent, runRatePct,
-      avgActive, firstActive, lastActive, footprintPct,
-    }
-  }, [monthlyData])
+    return { peak, trough, avgEarly, avgMid, avgRecent, runRatePct, midShiftPct, firstActive, lastActive, footprintPct }
+  }, [monthlyData, mid])
 
-  // ── Macro chart traces: bars (revenue) + line (active stores) ─────────────
+  // ── Macro chart — one trace per phase for legend + phase annotations ───────
   const macroTraces = useMemo(() => {
-    const earlyData  = monthlyData.filter(d => !d.isRecent)
-    const recentData = monthlyData.filter(d =>  d.isRecent)
+    const byPhase = (p: string) => monthlyData.filter(d => d.phase === p)
+    const earlyD  = byPhase('early')
+    const midD    = byPhase('mid')
+    const recentD = byPhase('recent')
+
+    const bar = (data: typeof monthlyData, phase: 'early' | 'mid' | 'recent', label: string) => ({
+      type: 'bar' as const,
+      name: label,
+      x: data.map(d => d.m),
+      y: data.map(d => d.rev),
+      marker: { color: PHASE_COLOR[phase], opacity: 0.88 },
+      yaxis: 'y' as const,
+      hovertemplate: `<b>%{x}</b><br>Revenue: ₹%{y:,.0f}<extra>${label}</extra>`,
+    })
 
     return [
+      ...(earlyD.length ? [bar(earlyD, 'early', 'Early')] : []),
+      ...(midD.length   ? [bar(midD,   'mid',   'Mid Phase')] : []),
+      ...(recentD.length? [bar(recentD,'recent','Recent')] : []),
       {
-        type: 'bar' as const,
-        name: 'Early revenue',
-        x: earlyData.map(d => d.m),
-        y: earlyData.map(d => d.rev),
-        marker: { color: '#94a3b8' },
-        yaxis: 'y',
-        hovertemplate: '<b>%{x}</b><br>Revenue: ₹%{y:,.0f}<extra>Early</extra>',
-      },
-      {
-        type: 'bar' as const,
-        name: 'Recent revenue',
-        x: recentData.map(d => d.m),
-        y: recentData.map(d => d.rev),
-        marker: { color: '#3b82f6' },
-        yaxis: 'y',
-        hovertemplate: '<b>%{x}</b><br>Revenue: ₹%{y:,.0f}<extra>Recent</extra>',
-      },
-      {
-        type: 'scatter' as const,
-        mode: 'lines+markers' as const,
-        name: 'Active stores',
-        x: monthlyData.map(d => d.m),
-        y: monthlyData.map(d => d.active),
-        yaxis: 'y2',
-        line: { color: '#14b8a6', width: 2 },
-        marker: { color: '#14b8a6', size: 5 },
+        type: 'scatter' as const, mode: 'lines+markers' as const,
+        name: 'Active stores', x: monthlyData.map(d => d.m), y: monthlyData.map(d => d.active),
+        yaxis: 'y2' as const,
+        line: { color: '#14b8a6', width: 2 }, marker: { color: '#14b8a6', size: 5 },
         hovertemplate: '<b>%{x}</b><br>Active stores: %{y}<extra></extra>',
       },
     ]
   }, [monthlyData])
+
+  // Phase label annotations for the bar chart
+  const phaseAnnotations = useMemo(() => {
+    const anns: object[] = []
+    const labelAt = (months: string[], text: string, color: string) => {
+      if (!months.length) return
+      const centerM = months[Math.floor(months.length / 2)]
+      anns.push({
+        x: centerM, y: 1.06, xref: 'x', yref: 'paper',
+        text: `<b>${text}</b>`, showarrow: false,
+        font: { color, size: 10, family: 'Inter, sans-serif' },
+        xanchor: 'center', yanchor: 'bottom',
+      })
+    }
+    labelAt(early,  'Early Period',  PHASE_COLOR.early)
+    labelAt(mid,    'Mid Phase',     PHASE_COLOR.mid)
+    labelAt(recent, 'Recent Period', PHASE_COLOR.recent)
+    return anns
+  }, [early, mid, recent])
 
   // ── Box-plot traces ────────────────────────────────────────────────────────
   const boxTraces = useMemo(() =>
@@ -181,13 +191,15 @@ export default function MonthlyRevenue({ filters }: Props) {
   return (
     <div className="space-y-5">
 
-      {/* ── Overall Monthly Revenue & Active Stores ── */}
+      {/* ── Monthly Revenue Trend ── */}
       <motion.div {...panelSpring(0.12)} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
         <div className="flex items-start justify-between gap-2 flex-wrap mb-1">
           <div>
-            <h3 className="text-sm font-semibold text-gray-800">Overall Monthly Revenue &amp; Active Stores</h3>
+            <h3 className="text-sm font-semibold text-gray-800">Monthly Revenue Trend</h3>
             <p className="text-[11px] text-gray-500 mt-0.5">
-              Macro context — bars = revenue, line = active store count · blue marks the recent phase
+              Bars = revenue by phase
+              {mid.length > 0 ? <> · <span style={{ color: PHASE_COLOR.mid }}>■</span> <span className="text-indigo-500">{mid[0]}{mid.length > 1 ? `–${mid[mid.length - 1]}` : ''}</span> = mid phase</> : null}
+              {' '}· Line = active store count
             </p>
           </div>
           {kpis?.runRatePct != null && (
@@ -230,8 +242,9 @@ export default function MonthlyRevenue({ filters }: Props) {
               side: 'right' as const,
               showgrid: false,
             },
-            margin: { l: 70, r: 70, t: 8, b: 110 },
-            height: 400,
+            annotations: phaseAnnotations as any[],
+            margin: { l: 70, r: 70, t: 36, b: 110 },
+            height: 420,
           }}
           config={{ displayModeBar: false, responsive: true }}
           style={{ width: '100%' }}
@@ -241,49 +254,47 @@ export default function MonthlyRevenue({ filters }: Props) {
         {kpis && (
           <div className="mt-4 border-t border-gray-100 pt-4">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-3">
-              What the macro trend says
+              Story so far
             </p>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className={cn('grid grid-cols-1 gap-3', mid.length > 0 ? 'sm:grid-cols-4' : 'sm:grid-cols-3')}>
 
               {/* Peak & Trough */}
               <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">
-                  Peak &amp; Trough
-                </p>
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">Peak &amp; Trough</p>
                 <p className="text-[11px] text-gray-700 leading-relaxed">
-                  Revenue peaked in{' '}
-                  <span className="text-gray-900 font-semibold">{kpis.peak.m}</span>{' '}
-                  ({fmtInr(kpis.peak.rev)}); weakest month was{' '}
-                  <span className="text-gray-900 font-semibold">{kpis.trough.m}</span>{' '}
-                  ({fmtInr(kpis.trough.rev)}).
+                  Best month: <span className="text-gray-900 font-semibold">{kpis.peak.m}</span> ({fmtInr(kpis.peak.rev)}).
+                  Weakest: <span className="text-gray-900 font-semibold">{kpis.trough.m}</span> ({fmtInr(kpis.trough.rev)}).
                 </p>
               </div>
 
-              {/* Run-Rate Shift */}
+              {/* Mid Phase — only when mid has months */}
+              {mid.length > 0 && kpis.midShiftPct != null && (
+                <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-indigo-500 mb-1.5">Mid Phase ({mid[0]}{mid.length > 1 ? `–${mid[mid.length - 1]}` : ''})</p>
+                  <p className="text-[11px] text-gray-700 leading-relaxed">
+                    Mid phase averaged <span className="text-gray-900 font-semibold">{fmtInr(kpis.avgMid)}</span>,
+                    a <span className={cn('font-semibold', kpis.midShiftPct >= 0 ? 'text-emerald-600' : 'text-red-600')}>{fmtPct(kpis.midShiftPct)}</span> shift from early baseline.
+                  </p>
+                </div>
+              )}
+
+              {/* Early → Recent Run-Rate Shift */}
               <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">
-                  Run-Rate Shift
-                </p>
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">Run-Rate Shift</p>
                 <p className="text-[11px] text-gray-700 leading-relaxed">
-                  Recent-phase average is{' '}
-                  <span className="text-gray-900 font-semibold">{fmtInr(kpis.avgRecent)}/mo</span>{' '}
-                  vs{' '}
-                  <span className="text-gray-900 font-semibold">{fmtInr(kpis.avgEarly)}/mo</span>{' '}
-                  early — a {fmtPct(kpis.runRatePct)} change.
+                  Early avg <span className="text-gray-900 font-semibold">{fmtInr(kpis.avgEarly)}/mo</span> →
+                  Recent avg <span className="text-gray-900 font-semibold">{fmtInr(kpis.avgRecent)}/mo</span> —
+                  a <span className={cn('font-semibold', kpis.runRatePct >= 0 ? 'text-emerald-600' : 'text-red-600')}>{fmtPct(kpis.runRatePct)}</span> change.
                 </p>
               </div>
 
               {/* Active-Store Footprint */}
               <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">
-                  Active-Store Footprint
-                </p>
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">Active-Store Footprint</p>
                 <p className="text-[11px] text-gray-700 leading-relaxed">
-                  Active stores moved from{' '}
-                  <span className="text-gray-900 font-semibold">{kpis.firstActive.toLocaleString()}</span>{' '}
-                  to{' '}
-                  <span className="text-gray-900 font-semibold">{kpis.lastActive.toLocaleString()}</span>{' '}
-                  across the timeline ({fmtPct(kpis.footprintPct)}).
+                  Active stores: <span className="text-gray-900 font-semibold">{kpis.firstActive}</span> →{' '}
+                  <span className="text-gray-900 font-semibold">{kpis.lastActive}</span>{' '}
+                  (<span className={cn('font-semibold', kpis.footprintPct >= 0 ? 'text-emerald-600' : 'text-red-600')}>{fmtPct(kpis.footprintPct)}</span>).
                 </p>
               </div>
 
@@ -294,8 +305,8 @@ export default function MonthlyRevenue({ filters }: Props) {
 
       {/* ── Store Revenue Distribution ── */}
       <motion.div {...panelSpring(0.22)} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-        <h3 className="text-sm font-semibold text-gray-800">Store Revenue Distribution</h3>
-        <p className="text-[11px] text-gray-500 mt-0.5 mb-3">Spread of individual store revenues per month</p>
+        <h3 className="text-sm font-semibold text-gray-800">Store Revenue Distribution by Month</h3>
+        <p className="text-[11px] text-gray-500 mt-0.5 mb-3">Box plot showing how revenues spread across individual stores each month — outlier-free view of the core distribution</p>
         <Plot
           data={boxTraces}
           layout={{

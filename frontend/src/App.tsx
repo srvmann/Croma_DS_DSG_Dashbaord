@@ -28,17 +28,20 @@ import { cn } from './lib/utils'
 
 // ── Tab registry ──────────────────────────────────────────────────────────────
 
+// Tab order tells a deliberate story:
+//  1 → Big picture  2 → Trend  3 → Store positions  4-6 → Winners / losers / movers
+//  7-8 → Geography  9 → Drill-down  10 → Current-month target
 const TABS = [
-  { id: 'executive',          label: 'Executive Overview' },
-  { id: 'monthly-revenue',    label: 'Monthly Revenue' },
-  { id: 'store-journey',      label: 'Store Journey Map' },
-  { id: 'state-journey',      label: 'State Journey Analysis' },
-  { id: 'geo',                label: 'Geo Analytics' },
-  { id: 'rising-stars',       label: 'Rising Stars' },
-  { id: 'fallen-stars',       label: 'Fallen Stars' },
-  { id: 'revenue-movers',     label: 'Revenue Movers' },
-  { id: 'store-deep-dive',    label: 'Store Deep Dive' },
-  { id: 'target-command',     label: 'Target Command Center' },
+  { id: 'executive',       label: 'Overview'         },
+  { id: 'monthly-revenue', label: 'Revenue Trend'    },
+  { id: 'store-journey',   label: 'Store Journeys'   },
+  { id: 'rising-stars',    label: 'Rising Stores'    },
+  { id: 'fallen-stars',    label: 'Fallen Stores'    },
+  { id: 'revenue-movers',  label: 'Top Movers'       },
+  { id: 'state-journey',   label: 'State Health'     },
+  { id: 'geo',             label: 'Geo Map'          },
+  { id: 'store-deep-dive', label: 'Store Spotlight'  },
+  { id: 'target-command',  label: 'Target Tracker'   },
 ] as const
 
 type TabId = typeof TABS[number]['id']
@@ -383,12 +386,9 @@ export default function App() {
       </main>
 
       {/* ── Footer ── */}
-      <footer
-        className="fixed bottom-0 inset-x-0 z-20 h-10 flex items-center justify-center border-t border-white/5"
-        style={{ background: 'linear-gradient(90deg, #080f20 0%, #1e3a5f 50%, #080f20 100%)' }}
-      >
-        <span className="text-[11px] font-medium tracking-[0.18em] uppercase text-gray-500 select-none">
-          StoreWise Analytics Platform
+      <footer className="fixed bottom-0 inset-x-0 z-20 h-10 flex items-center justify-center border-t border-gray-200 bg-white/95 backdrop-blur-sm">
+        <span className="text-[11px] font-medium tracking-[0.18em] uppercase text-gray-400 select-none">
+          StoreWise · Croma DSG Analytics
         </span>
       </footer>
 

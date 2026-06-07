@@ -7,6 +7,15 @@ Domain-specific functions (Sales / Target files):
   get_month_columns(df)          → detect "MMM-YYYY" columns automatically
   validate_store_match(s, t)     → warn on Store_ID mismatches between files
 
+Supports two sales formats:
+  • Pre-aggregated: Store_ID | Store_Name | State | Category | Jan-2024 | …
+  • Transactional:  SHIP_NODE | Category | State | Sub Classification |
+                    GROSS_AMOUNT | Month (e.g. "Mar-26")
+
+Supports two target formats:
+  • Legacy:   Store_ID | Monthly_Target
+  • OW Budget: Store Key | Store Name | … | OOW
+
 Generic functions (used by /api/data and /api/analysis):
   get_sheets / get_sheet_data / analyze_sheet
 """
@@ -20,14 +29,63 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# Matches "Jul-2024", "jan-2025", "DEC-2023", etc.
+# Matches "Jul-2024", "jan-2025", "DEC-2023", etc. (pre-aggregated column headers)
 _MONTH_RE = re.compile(
     r"^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4}$",
     re.IGNORECASE,
 )
 
+# Matches short-year month values: "Mar-26", "Apr-26"
+_MONTH_SHORT_RE = re.compile(
+    r"^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2})$",
+    re.IGNORECASE,
+)
+
+_MONTH_ORDER = {
+    m: i for i, m in enumerate(
+        ["jan", "feb", "mar", "apr", "may", "jun",
+         "jul", "aug", "sep", "oct", "nov", "dec"]
+    )
+}
+
 _SALES_EXPECTED = {"Store_ID", "Store_Name", "State", "Category"}
 _TARGETS_EXPECTED = {"Store_ID", "Monthly_Target"}
+
+DS_LABEL  = "Device Secure"
+DSG_LABEL = "Device Secure Gold"
+
+_MONTH_FULL_TO_ABBR: dict[str, str] = {
+    "january": "Jan", "february": "Feb", "march": "Mar", "april": "Apr",
+    "may": "May", "june": "Jun", "july": "Jul", "august": "Aug",
+    "september": "Sep", "october": "Oct", "november": "Nov", "december": "Dec",
+}
+
+
+def detect_month_from_filename(filename: str) -> str | None:
+    """Return 'MMM-YYYY' if the filename contains a recognisable month + 4-digit year.
+
+    Example: 'OW Budget June 2026 store wise.xlsx' → 'Jun-2026'
+    """
+    lower = filename.lower()
+    year_match = re.search(r"20\d{2}", lower)
+    if not year_match:
+        return None
+    year = year_match.group()
+    for full, abbr in _MONTH_FULL_TO_ABBR.items():
+        if full in lower:
+            return f"{abbr}-{year}"
+    return None
+
+
+def _normalise_month(m: str) -> str:
+    """Convert 'Mar-26' → 'Mar-2026'. Full-year 'Mar-2026' is returned as-is."""
+    m = str(m).strip()
+    match = _MONTH_SHORT_RE.match(m)
+    if match:
+        name, yy = match.group(1), match.group(2)
+        # Assume 20xx for 2-digit years
+        return f"{name.capitalize()}-20{yy}"
+    return m
 
 
 # ── Domain-specific ────────────────────────────────────────────────────────────
@@ -44,22 +102,21 @@ def validate_store_match(
     """Compare Store_ID sets across two DataFrames.
 
     Returns a (possibly empty) list of human-readable warning strings.
-    Each warning is also emitted via the module logger.
-    Column lookup is case-insensitive.
+    Handles both legacy (Store_ID) and transactional (SHIP_NODE / Store Key) formats.
     """
     warnings: list[str] = []
 
-    s_col = _find_col(sales_df, "store_id")
-    t_col = _find_col(target_df, "store_id")
+    # Sales: try Store_ID first, then SHIP_NODE (transactional format)
+    s_col = _find_col(sales_df, "store_id") or _find_col(sales_df, "ship_node")
+    # Target: try Store_ID first, then Store Key (OW Budget format)
+    t_col = _find_col(target_df, "store_id") or _find_col(target_df, "store key")
 
     if s_col is None:
-        w = "Sales DataFrame has no Store_ID column — cannot validate."
-        logger.warning(w)
-        return [w]
+        logger.info("validate_store_match: no store ID column found in sales — skipping validation.")
+        return []
     if t_col is None:
-        w = "Target DataFrame has no Store_ID column — cannot validate."
-        logger.warning(w)
-        return [w]
+        logger.info("validate_store_match: no store ID column found in targets — skipping validation.")
+        return []
 
     sales_ids = set(sales_df[s_col].dropna().astype(str).str.strip())
     target_ids = set(target_df[t_col].dropna().astype(str).str.strip())
@@ -87,42 +144,164 @@ def validate_store_match(
     return warnings
 
 
-def parse_sales(filepath: str) -> list[dict[str, Any]]:
-    """Parse a Sales XLSX file.
+def _is_transactional(df: pd.DataFrame) -> bool:
+    """True when the file is transaction-level DSG/DS data (SHIP_NODE / GROSS_AMOUNT)."""
+    cols = {c.strip().lower() for c in df.columns}
+    return "ship_node" in cols or (
+        "sub classification" in cols and "gross_amount" in cols
+    )
 
-    Expected columns (case-insensitive):
-      Store_ID, Store_Name, State, Category, <MMM-YYYY> …
 
-    Returns a list of dicts, one per row:
+def _is_ow_target_format(df: pd.DataFrame) -> bool:
+    """True when the file is the OW Budget format (Store Key / OOW)."""
+    cols = {c.strip().lower() for c in df.columns}
+    return "store key" in cols and "oow" in cols
+
+
+def _sort_months_list(months: list[str]) -> list[str]:
+    def _key(m: str) -> tuple[int, int]:
+        parts = m.split("-")
+        if len(parts) != 2:
+            return (9999, 99)
+        name, year = parts
+        return (int(year) if year.isdigit() else 9999,
+                _MONTH_ORDER.get(name.lower(), 99))
+    return sorted(months, key=_key)
+
+
+def _parse_transactional(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """Parse transaction-level DSG/DS sales into per-store aggregated records.
+
+    Input columns (case-insensitive):
+      SHIP_NODE        → store_id
+      Category         → store tier (A+/A/B/C/D)
+      State            → state
+      Sub Classification → "Device Secure" (DS) or "Device Secure Gold" (DSG)
+      GROSS_AMOUNT     → sale value
+      Month            → "Mar-26" style (normalised to "Mar-2026")
+
+    Returns one dict per store:
       {
-        "store_id":     str,
-        "store_name":   str,
-        "state":        str,
-        "category":     str,
-        "monthly_sales": {"Jul-2024": 150000.0, …},
-        "total_sales":  float,
+        store_id, store_name, state, category,
+        monthly_sales:     {month: DS+DSG total},
+        monthly_sales_ds:  {month: DS only},
+        monthly_sales_dsg: {month: DSG only},
+        total_sales: float,
       }
+    """
+    c_store = _find_col(df, "ship_node") or _find_col(df, "store_id")
+    c_sub   = _find_col(df, "sub classification")
+    c_amt   = _find_col(df, "gross_amount")
+    c_month = _find_col(df, "month")
+    c_state = _find_col(df, "state")
+    c_cat   = _find_col(df, "category")
 
-    Missing / non-numeric revenue cells are treated as 0.
-    Rows where Store_ID is blank are skipped with a warning.
+    if not all([c_store, c_sub, c_amt, c_month]):
+        raise ValueError(
+            "Transactional file missing required columns "
+            "(SHIP_NODE, Sub Classification, GROSS_AMOUNT, Month)"
+        )
+
+    df = df.copy()
+    df[c_amt]   = pd.to_numeric(df[c_amt], errors="coerce").fillna(0)
+    df[c_store] = df[c_store].astype(str).str.strip()
+    df[c_month] = df[c_month].astype(str).str.strip().apply(_normalise_month)
+    df[c_sub]   = df[c_sub].astype(str).str.strip()
+
+    # Collect per-store metadata (take first occurrence)
+    meta: dict[str, dict] = {}
+    for _, row in df.iterrows():
+        sid = str(row[c_store])
+        if sid not in meta:
+            meta[sid] = {
+                "state":    _str(row, c_state),
+                "category": _str(row, c_cat),
+            }
+
+    # Aggregate: sum GROSS_AMOUNT by (store, month, sub_classification)
+    grp = (
+        df.groupby([c_store, c_month, c_sub], observed=True)[c_amt]
+        .sum()
+        .reset_index()
+    )
+
+    # Build per-store dicts
+    store_data: dict[str, dict] = {}
+    for _, row in grp.iterrows():
+        sid   = str(row[c_store])
+        month = str(row[c_month])
+        sub   = str(row[c_sub])
+        amt   = float(row[c_amt])
+
+        if sid not in store_data:
+            store_data[sid] = {"ds": {}, "dsg": {}}
+
+        if sub == DS_LABEL:
+            store_data[sid]["ds"][month]  = store_data[sid]["ds"].get(month, 0) + amt
+        elif sub == DSG_LABEL:
+            store_data[sid]["dsg"][month] = store_data[sid]["dsg"].get(month, 0) + amt
+        else:
+            # Unknown sub-classification — count in DS bucket
+            store_data[sid]["ds"][month]  = store_data[sid]["ds"].get(month, 0) + amt
+
+    # Gather all months so every store has the same keys
+    all_months = _sort_months_list(
+        list({m for d in store_data.values() for m in list(d["ds"]) + list(d["dsg"])})
+    )
+
+    records: list[dict[str, Any]] = []
+    for sid, buckets in store_data.items():
+        ds_monthly  = {m: buckets["ds"].get(m, 0.0)  for m in all_months}
+        dsg_monthly = {m: buckets["dsg"].get(m, 0.0) for m in all_months}
+        total_monthly = {m: ds_monthly[m] + dsg_monthly[m] for m in all_months}
+
+        records.append({
+            "store_id":         sid,
+            "store_name":       "",  # filled from targets file if available
+            "state":            meta.get(sid, {}).get("state", ""),
+            "category":         meta.get(sid, {}).get("category", ""),
+            "monthly_sales":    total_monthly,
+            "monthly_sales_ds": ds_monthly,
+            "monthly_sales_dsg": dsg_monthly,
+            "total_sales":      round(sum(total_monthly.values()), 2),
+        })
+
+    return records
+
+
+def parse_sales(filepath: str) -> list[dict[str, Any]]:
+    """Parse a Sales XLSX file — handles both pre-aggregated and transactional formats.
+
+    Pre-aggregated format (legacy):
+      Store_ID | Store_Name | State | Category | Jan-2024 | …
+
+    Transactional format (DSG/DS):
+      SHIP_NODE | Category | State | Sub Classification | GROSS_AMOUNT | Month
+
+    Returns a list of store dicts. Transactional records include
+    monthly_sales_ds and monthly_sales_dsg in addition to monthly_sales.
     """
     df = pd.read_excel(filepath)
     df = _strip_column_names(df)
+
+    if _is_transactional(df):
+        logger.info("Detected transactional sales format in: %s", filepath)
+        return _parse_transactional(df)
+
+    # ── Pre-aggregated (legacy) path ──────────────────────────────────────────
     _warn_missing_cols(df, _SALES_EXPECTED, filepath)
 
     month_cols = get_month_columns(df)
     if not month_cols:
         logger.warning("No month columns (MMM-YYYY) detected in: %s", filepath)
 
-    # Coerce all revenue columns to numeric; missing → 0
     for col in month_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    # Resolve field columns case-insensitively
-    c_id = _find_col(df, "store_id")
+    c_id   = _find_col(df, "store_id")
     c_name = _find_col(df, "store_name")
     c_state = _find_col(df, "state")
-    c_cat = _find_col(df, "category")
+    c_cat   = _find_col(df, "category")
 
     records: list[dict[str, Any]] = []
     skipped = 0
@@ -134,16 +313,16 @@ def parse_sales(filepath: str) -> list[dict[str, Any]]:
             continue
 
         monthly: dict[str, float] = {col: float(row[col]) for col in month_cols}
-        records.append(
-            {
-                "store_id": raw_id,
-                "store_name": _str(row, c_name),
-                "state": _str(row, c_state),
-                "category": _str(row, c_cat),
-                "monthly_sales": monthly,
-                "total_sales": round(sum(monthly.values()), 2),
-            }
-        )
+        records.append({
+            "store_id":         raw_id,
+            "store_name":       _str(row, c_name),
+            "state":            _str(row, c_state),
+            "category":         _str(row, c_cat),
+            "monthly_sales":    monthly,
+            "monthly_sales_ds": {},
+            "monthly_sales_dsg": {},
+            "total_sales":      round(sum(monthly.values()), 2),
+        })
 
     if skipped:
         logger.warning("Skipped %d row(s) with blank Store_ID in: %s", skipped, filepath)
@@ -151,20 +330,28 @@ def parse_sales(filepath: str) -> list[dict[str, Any]]:
     return records
 
 
-def parse_targets(filepath: str) -> dict[str, float]:
-    """Parse a Targets XLSX file.
+def parse_targets(filepath: str) -> dict[str, dict]:
+    """Parse a Targets XLSX file — handles both legacy and OW Budget formats.
 
-    Expected columns (case-insensitive): Store_ID, Monthly_Target.
+    Legacy format:
+      Store_ID | Monthly_Target
 
-    Returns {store_id_str: target_float}.
-    Missing target values are treated as 0.
-    Duplicate Store_IDs trigger a warning; last row wins.
+    OW Budget format:
+      Store Key | Store Name | Head - Operations | Zonal Manager | Cluster Manager | OOW
+
+    Returns {store_id: {"target": float, "store_name": str, "zonal_manager": str, "cluster_manager": str}}.
     """
     df = pd.read_excel(filepath)
     df = _strip_column_names(df)
+
+    if _is_ow_target_format(df):
+        logger.info("Detected OW Budget target format in: %s", filepath)
+        return _parse_ow_targets(df)
+
+    # ── Legacy format ─────────────────────────────────────────────────────────
     _warn_missing_cols(df, _TARGETS_EXPECTED, filepath)
 
-    c_id = _find_col(df, "store_id")
+    c_id     = _find_col(df, "store_id")
     c_target = _find_col(df, "monthly_target")
 
     if c_id is None:
@@ -174,25 +361,51 @@ def parse_targets(filepath: str) -> dict[str, float]:
     if c_target is not None:
         df[c_target] = pd.to_numeric(df[c_target], errors="coerce").fillna(0)
 
-    # Drop rows without a Store_ID
     df = df[df[c_id].notna()].copy()
     df[c_id] = df[c_id].astype(str).str.strip()
     df = df[df[c_id].str.lower() != "nan"]
 
-    # Warn on duplicates
     dupes = df[df.duplicated(subset=[c_id], keep=False)][c_id].unique()
     if len(dupes):
-        logger.warning(
-            "Duplicate Store_IDs in targets file (last row kept): %s",
-            list(dupes)[:10],
-        )
+        logger.warning("Duplicate Store_IDs in targets (last row kept): %s", list(dupes)[:10])
 
-    result: dict[str, float] = {}
+    result: dict[str, dict] = {}
     for _, row in df.iterrows():
         sid = str(row[c_id])
-        target = float(row[c_target]) if c_target else 0.0
-        result[sid] = target
+        result[sid] = {
+            "target":          float(row[c_target]) if c_target else 0.0,
+            "store_name":      "",
+            "zonal_manager":   "",
+            "cluster_manager": "",
+        }
+    return result
 
+
+def _parse_ow_targets(df: pd.DataFrame) -> dict[str, dict]:
+    """Parse OW Budget format: Store Key | Store Name | … | OOW."""
+    c_id   = _find_col(df, "store key")
+    c_name = _find_col(df, "store name")
+    c_oow  = _find_col(df, "oow")
+    c_zm   = _find_col(df, "zonal manager")
+    c_cm   = _find_col(df, "cluster manager")
+
+    if c_id is None or c_oow is None:
+        raise ValueError("OW Budget file must have 'Store Key' and 'OOW' columns.")
+
+    df = df[df[c_id].notna()].copy()
+    df[c_id]  = df[c_id].astype(str).str.strip()
+    df[c_oow] = pd.to_numeric(df[c_oow], errors="coerce").fillna(0)
+    df = df[df[c_id].str.lower() != "nan"]
+
+    result: dict[str, dict] = {}
+    for _, row in df.iterrows():
+        sid = str(row[c_id])
+        result[sid] = {
+            "target":          float(row[c_oow]),
+            "store_name":      _str(row, c_name),
+            "zonal_manager":   _str(row, c_zm),
+            "cluster_manager": _str(row, c_cm),
+        }
     return result
 
 

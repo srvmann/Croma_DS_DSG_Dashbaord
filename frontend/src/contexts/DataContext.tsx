@@ -7,38 +7,7 @@ import {
   useState,
 } from 'react'
 import { getDashboardData, type StoreRecord } from '@/lib/api'
-
-// ── Month-split logic ─────────────────────────────────────────────────────────
-//
-// Splits a chronologically sorted month array into early / recent halves for
-// period-over-period comparison.
-//
-// Even count N  → earlyMonths = first N/2,  recentMonths = last N/2,  midMonth = null
-// Odd  count N  → earlyMonths = first ⌊N/2⌋, midMonth = months[⌊N/2⌋],
-//                 recentMonths = last ⌊N/2⌋
-//
-// Edge cases:
-//   0 months → all empty, midMonth = null
-//   1 month  → earlyMonths = [], recentMonths = [months[0]], midMonth = null
-
-function splitMonths(months: string[]): {
-  earlyMonths: string[]
-  recentMonths: string[]
-  midMonth: string | null
-} {
-  const n = months.length
-  if (n === 0) return { earlyMonths: [], recentMonths: [], midMonth: null }
-  if (n === 1) return { earlyMonths: [], recentMonths: [months[0]], midMonth: null }
-
-  const half = Math.floor(n / 2)
-  const isEven = n % 2 === 0
-
-  return {
-    earlyMonths: months.slice(0, half),
-    recentMonths: isEven ? months.slice(half) : months.slice(half + 1),
-    midMonth: isEven ? null : months[half],
-  }
-}
+import { classifyAllStores, type ClassificationResult } from '@/lib/classificationEngine'
 
 // ── Context shape ─────────────────────────────────────────────────────────────
 
@@ -49,6 +18,7 @@ export interface DataContextValue {
   states: string[]
   categories: string[]
   hasTargets: boolean
+  targetMonth: string | null  // month the active target file covers, e.g. 'Jun-2026'
   warnings: string[]
 
   // Loading / error state
@@ -58,10 +28,13 @@ export interface DataContextValue {
   // Derived — true once stores have been uploaded and parsed
   hasData: boolean
 
-  // Computed period split (derived from months[])
-  earlyMonths: string[]    // first half of the time range
-  recentMonths: string[]   // second half of the time range
-  midMonth: string | null  // centre month when month count is odd, else null
+  // Phase split — derived from the classification engine's allocatePhases()
+  earlyMonths:  string[]   // first third of the time range
+  midMonths:    string[]   // middle third of the time range
+  recentMonths: string[]   // last third of the time range
+
+  // Centralized classification — single source of truth for all tabs
+  classification: ClassificationResult
 
   // Actions
   refetchData: () => Promise<void>
@@ -85,6 +58,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [states, setStates] = useState<string[]>([])
   const [categories, setCategories] = useState<string[]>([])
   const [hasTargets, setHasTargets] = useState(false)
+  const [targetMonth, setTargetMonth] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -101,6 +75,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         setStates([])
         setCategories([])
         setHasTargets(false)
+        setTargetMonth(null)
         setWarnings([])
       } else {
         setStores(data.stores)
@@ -108,6 +83,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         setStates(data.states)
         setCategories(data.categories)
         setHasTargets(data.has_targets)
+        setTargetMonth(data.target_month ?? null)
         setWarnings(data.warnings)
       }
     } catch {
@@ -122,10 +98,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
   const hasData = stores.length > 0
 
-  // Memoised period split — only recomputed when months changes
-  const { earlyMonths, recentMonths, midMonth } = useMemo(
-    () => splitMonths(months),
-    [months],
+  // Centralized classification engine — single source of truth for all tabs
+  const classification = useMemo(
+    () => classifyAllStores(stores, months),
+    [stores, months],
   )
 
   const value: DataContextValue = {
@@ -134,13 +110,15 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     states,
     categories,
     hasTargets,
+    targetMonth,
     warnings,
     isLoading,
     error,
     hasData,
-    earlyMonths,
-    recentMonths,
-    midMonth,
+    earlyMonths:  classification.phases.earlyMonths,
+    midMonths:    classification.phases.midMonths,
+    recentMonths: classification.phases.recentMonths,
+    classification,
     refetchData,
   }
 

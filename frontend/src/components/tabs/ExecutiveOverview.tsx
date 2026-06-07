@@ -237,7 +237,7 @@ export default function ExecutiveOverview({ filters }: Props) {
   const { stores, months } = useDataContext()
 
   // ── Filter + split ─────────────────────────────────────────────────────────
-  const { fs, early, recent } = useMemo(() => {
+  const { fs, fm, early, recent } = useMemo(() => {
     let fs = stores
     if (filters.state)    fs = fs.filter(s => s.state    === filters.state)
     if (filters.category) fs = fs.filter(s => s.category === filters.category)
@@ -249,7 +249,7 @@ export default function ExecutiveOverview({ filters }: Props) {
       const i = months.indexOf(filters.toMonth); if (i >= 0) fm = fm.slice(0, i + 1)
     }
     const { early, recent } = halve(fm)
-    return { fs, early, recent }
+    return { fs, fm, early, recent }
   }, [stores, months, filters])
 
   // ── Journey data ───────────────────────────────────────────────────────────
@@ -315,11 +315,20 @@ export default function ExecutiveOverview({ filters }: Props) {
     early.map(m => ({ m, rev: fs.reduce((s, st) => s + (st.monthly_sales[m] ?? 0), 0) })),
   [fs, early])
 
+  const barMid = useMemo(() => {
+    const earlySet  = new Set(early)
+    const recentSet = new Set(recent)
+    return fm
+      .filter(m => !earlySet.has(m) && !recentSet.has(m))
+      .map(m => ({ m, rev: fs.reduce((s, st) => s + (st.monthly_sales[m] ?? 0), 0) }))
+  }, [fs, fm, early, recent])
+
   const barRecent = useMemo(() =>
     recent.map(m => ({ m, rev: fs.reduce((s, st) => s + (st.monthly_sales[m] ?? 0), 0) })),
   [fs, recent])
 
-  const totalEarly  = barEarly.reduce((s, d) => s + d.rev, 0)
+  const totalEarly  = barEarly.reduce((s, d)  => s + d.rev, 0)
+  const totalMid    = barMid.reduce((s, d)    => s + d.rev, 0)
   const totalRecent = barRecent.reduce((s, d) => s + d.rev, 0)
   const phaseShift  = totalEarly > 0 ? (totalRecent - totalEarly) / totalEarly * 100 : null
 
@@ -491,8 +500,10 @@ export default function ExecutiveOverview({ filters }: Props) {
           <div>
             <h3 className="text-sm font-semibold text-gray-800">Revenue Context — Network Trend</h3>
             <p className="text-[11px] text-gray-500 mt-0.5">
-              Monthly gross revenue · early phase vs recent phase
-              {totalEarly + totalRecent > 0 ? ` · ${fmtInr(totalEarly + totalRecent)} total` : ''}
+              Monthly gross revenue · early / mid / recent phases
+              {totalEarly + totalMid + totalRecent > 0
+                ? ` · ${fmtInr(totalEarly + totalMid + totalRecent)} total`
+                : ''}
             </p>
           </div>
           {phaseShift !== null && (
@@ -513,7 +524,7 @@ export default function ExecutiveOverview({ filters }: Props) {
           )}
         </div>
 
-        {(barEarly.length + barRecent.length) === 0 ? (
+        {(barEarly.length + barMid.length + barRecent.length) === 0 ? (
           <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
             No data for selected filters
           </div>
@@ -528,6 +539,14 @@ export default function ExecutiveOverview({ filters }: Props) {
                 marker: { color: '#94a3b8' },
                 hovertemplate: '<b>%{x}</b><br>₹%{y:,.0f}<extra>Early Phase</extra>',
               },
+              ...(barMid.length > 0 ? [{
+                type: 'bar' as const,
+                name: 'Mid Phase',
+                x: barMid.map(d => d.m),
+                y: barMid.map(d => d.rev),
+                marker: { color: '#8b5cf6' },
+                hovertemplate: '<b>%{x}</b><br>₹%{y:,.0f}<extra>Mid Phase</extra>',
+              }] : []),
               {
                 type: 'bar' as const,
                 name: 'Recent Phase',

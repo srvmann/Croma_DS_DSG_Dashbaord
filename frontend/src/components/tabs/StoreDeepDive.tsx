@@ -8,6 +8,7 @@ import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
+import { allocatePhases, type StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
 
 const Plot = createPlotlyComponent(Plotly)
@@ -78,6 +79,16 @@ const JOURNEY_BADGE_DARK: Record<JourneyTag, string> = {
   Stable:  'bg-slate-400/20 text-slate-300 border border-slate-400/35',
   Sliding: 'bg-amber-400/20 text-amber-300 border border-amber-400/35',
   Falling: 'bg-red-400/20 text-red-300 border border-red-400/35',
+}
+
+const CATEGORY_BADGE_DARK: Record<StoreCategory, string> = {
+  'New Bloomer':          'bg-emerald-400/20 text-emerald-300 border border-emerald-400/35',
+  'Rising Star':          'bg-yellow-400/20 text-yellow-300 border border-yellow-400/35',
+  'Growing Store':        'bg-blue-400/20 text-blue-300 border border-blue-400/35',
+  'Consistent Performer': 'bg-violet-400/20 text-violet-300 border border-violet-400/35',
+  'Declining Store':      'bg-orange-400/20 text-orange-300 border border-orange-400/35',
+  'Fallen Star':          'bg-red-400/20 text-red-300 border border-red-400/35',
+  'Low Volume Store':     'bg-slate-400/20 text-slate-300 border border-slate-400/35',
 }
 
 const ACTIVITY_BADGE: Record<ActivityStatus, string> = {
@@ -382,7 +393,7 @@ function StoreSelector({ stores, selectedId, selectedLabel, onSelect }: {
 interface Props { filters: FilterState; initialStoreId?: string | null }
 
 export default function StoreDeepDive({ filters, initialStoreId }: Props) {
-  const { stores, months } = useDataContext()
+  const { stores, months, classification } = useDataContext()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const lastFilterKey = useRef('')
   const autoSelected = useRef(false)
@@ -397,22 +408,29 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
     return result
   }, [stores, filters.state, filters.category])
 
-  // Auto-select highest-revenue store; re-runs when state/category filter changes
+  // Track previous initialStoreId to detect cross-tab navigation changes
+  const prevInitialStoreId = useRef<string | null | undefined>(undefined)
+
+  // Auto-select store; re-runs when filters change or a new store is pushed from another tab
   useEffect(() => {
     const { state, category } = filtersRef.current
     const filterKey = `${state}|${category}`
     const filtersChanged = lastFilterKey.current !== filterKey
     lastFilterKey.current = filterKey
 
+    // initialStoreId changed (or first mount with a value) → apply it immediately
+    // This must be checked before the early-return so re-navigation always works
+    if (initialStoreId !== prevInitialStoreId.current) {
+      prevInitialStoreId.current = initialStoreId
+      if (initialStoreId) {
+        setSelectedId(initialStoreId)
+        autoSelected.current = true
+        return
+      }
+    }
+
     // Nothing changed and already selected — keep current selection
     if (!filtersChanged && autoSelected.current) return
-
-    // Navigate-to-store from another tab (initial load, no filter change)
-    if (initialStoreId && !filtersChanged && !autoSelected.current) {
-      setSelectedId(initialStoreId)
-      autoSelected.current = true
-      return
-    }
 
     // Auto-select highest-revenue store from the filtered list
     if (filteredStores.length > 0) {
@@ -442,22 +460,23 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
     [stores, selectedId],
   )
 
+  // Engine category for the selected store (global classification, independent of date filters)
+  const engineCategory = useMemo(
+    () => classification.metrics.find(m => m.store.store_id === selectedId)?.category ?? null,
+    [classification.metrics, selectedId],
+  )
+
   const derived = useMemo(() => {
     if (!selectedStore || fm.length === 0) return null
 
-    const n     = fm.length
-    const third = Math.max(1, Math.floor(n / 3))
-    const half  = Math.max(1, Math.floor(n / 2))
-
-    const earlyMs   = fm.slice(0, third)
-    const midMs     = fm.slice(third, third * 2)
-    const recentMs  = fm.slice(-third)
-    const earlyHalf  = fm.slice(0, half)
-    const recentHalf = n % 2 === 0 ? fm.slice(half) : fm.slice(half + 1)
+    // Use the same 3-phase allocator as the classification engine
+    const { earlyMonths: earlyMs, midMonths: midMs, recentMonths: recentMs } = allocatePhases(fm)
+    const earlyHalf  = earlyMs
+    const recentHalf = recentMs
 
     const revByMonth   = fm.map(m => selectedStore.monthly_sales[m] ?? 0)
     const totalRev     = revByMonth.reduce((a, b) => a + b, 0)
-    const avgMonthRev  = totalRev / n
+    const avgMonthRev  = totalRev / fm.length
     const activeMonths = revByMonth.filter(v => v > 0).length
     const rolling      = rollingAvg(revByMonth, 3)
 
@@ -535,9 +554,9 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
           className="flex items-start justify-between gap-4 flex-wrap"
         >
           <div>
-            <h2 className="text-base font-bold text-gray-900">Store Journey — Deep Dive</h2>
+            <h2 className="text-base font-bold text-gray-900">Store Spotlight — Full Profile</h2>
             <p className="text-[11px] text-gray-500 mt-0.5">
-              Full analytical profile, rank journey, health score and recommended actions
+              Revenue trend, rank journey across three phases, health score breakdown, and month-by-month waterfall
             </p>
           </div>
           <StoreSelector stores={filteredStores} selectedId={null} onSelect={setSelectedId} />
@@ -693,6 +712,11 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
                     <h2 className="text-xl font-bold text-white leading-tight">
                       {selectedStore.store_name ?? selectedStore.store_id}
                     </h2>
+                    {engineCategory && (
+                      <span className={cn('text-xs font-bold px-2.5 py-1 rounded-full shrink-0', CATEGORY_BADGE_DARK[engineCategory])}>
+                        {engineCategory}
+                      </span>
+                    )}
                     <span className={cn('text-xs font-bold px-2.5 py-1 rounded-full shrink-0', HEALTH_BADGE_DARK[t])}>
                       {t}
                     </span>

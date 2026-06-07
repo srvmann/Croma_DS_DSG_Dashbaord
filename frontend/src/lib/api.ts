@@ -8,9 +8,13 @@ export interface StoreRecord {
   store_id: string
   store_name?: string
   state?: string
-  category?: string
-  monthly_sales: Record<string, number>
-  target?: number | null
+  category?: string                          // store tier: A+ / A / B / C / D
+  monthly_sales: Record<string, number>      // DS + DSG combined
+  monthly_sales_ds?: Record<string, number>  // Device Secure only
+  monthly_sales_dsg?: Record<string, number> // Device Secure Gold only
+  target?: number | null                     // OOW budget for the target month
+  zonal_manager?: string
+  cluster_manager?: string
 }
 
 export interface DashboardData {
@@ -20,6 +24,7 @@ export interface DashboardData {
   states: string[]
   categories: string[]
   has_targets: boolean
+  target_month?: string | null  // e.g. 'Jun-2026' — the month the target file covers
   warnings: string[]
 }
 
