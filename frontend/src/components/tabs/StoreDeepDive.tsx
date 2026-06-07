@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { motion, useMotionValue, useTransform, animate } from 'framer-motion'
+import { motion, useMotionValue, useTransform, animate, AnimatePresence } from 'framer-motion'
 import { Building2, Search } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import createPlotlyComponent from 'react-plotly.js/factory'
@@ -18,24 +18,16 @@ type HealthTier     = 'Healthy' | 'Recovering' | 'Declining' | 'Dormant' | 'Unde
 type JourneyTag     = 'Surging' | 'Rising' | 'Stable' | 'Sliding' | 'Falling'
 type ActivityStatus = 'Active' | 'Growing' | 'Declining' | 'Inactive'
 
-// ── Light-mode Plotly tokens ──────────────────────────────────────────────────
+// ── Plotly axis tokens ────────────────────────────────────────────────────────
 
-const PT = { font: '#6b7280', grid: '#e5e7eb', line: '#d1d5db' }
+const PT = { font: '#64748b', grid: '#f1f5f9', line: '#e2e8f0' }
 
-// ── Animation variants ────────────────────────────────────────────────────────
+// ── Animation helpers ─────────────────────────────────────────────────────────
 
-const kpiContainer = {
-  hidden: {},
-  show:   { transition: { staggerChildren: 0.05, delayChildren: 0.03 } },
-}
-const kpiItem = {
-  hidden: { opacity: 0, y: 12, scale: 0.95 },
-  show:   { opacity: 1, y: 0, scale: 1, transition: { type: 'spring' as const, stiffness: 320, damping: 24 } },
-}
 const panelSpring = (delay = 0) => ({
-  initial:    { opacity: 0, y: 20 },
-  animate:    { opacity: 1, y: 0 },
-  transition: { type: 'spring' as const, stiffness: 260, damping: 26, delay },
+  initial:    { opacity: 0, y: 22, scale: 0.98 },
+  animate:    { opacity: 1, y: 0,  scale: 1    },
+  transition: { type: 'spring' as const, stiffness: 310, damping: 28, delay },
 })
 
 // ── Style maps ────────────────────────────────────────────────────────────────
@@ -56,6 +48,14 @@ const HEALTH_BADGE: Record<HealthTier, string> = {
   Underperforming: 'bg-red-50 text-red-700 border border-red-200',
 }
 
+const HEALTH_BADGE_DARK: Record<HealthTier, string> = {
+  Healthy:         'bg-emerald-400/20 text-emerald-300 border border-emerald-400/35',
+  Recovering:      'bg-sky-400/20 text-sky-300 border border-sky-400/35',
+  Declining:       'bg-amber-400/20 text-amber-300 border border-amber-400/35',
+  Dormant:         'bg-orange-400/20 text-orange-300 border border-orange-400/35',
+  Underperforming: 'bg-red-400/20 text-red-300 border border-red-400/35',
+}
+
 const HEALTH_LABEL: Record<HealthTier, string> = {
   Healthy:         'Green · Healthy. Strong, stable contributor — protect and learn from it.',
   Recovering:      'Recovering. Positive trajectory — monitor and support growth.',
@@ -65,19 +65,19 @@ const HEALTH_LABEL: Record<HealthTier, string> = {
 }
 
 const HEALTH_LABEL_COLOR: Record<HealthTier, string> = {
-  Healthy:         'text-emerald-700',
-  Recovering:      'text-sky-700',
-  Declining:       'text-amber-700',
-  Dormant:         'text-orange-700',
-  Underperforming: 'text-red-700',
+  Healthy:         'text-emerald-600',
+  Recovering:      'text-sky-600',
+  Declining:       'text-amber-600',
+  Dormant:         'text-orange-600',
+  Underperforming: 'text-red-600',
 }
 
-const JOURNEY_BADGE: Record<JourneyTag, string> = {
-  Surging: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
-  Rising:  'bg-blue-50 text-blue-700 border border-blue-200',
-  Stable:  'bg-gray-50 text-gray-600 border border-gray-200',
-  Sliding: 'bg-amber-50 text-amber-700 border border-amber-200',
-  Falling: 'bg-red-50 text-red-700 border border-red-200',
+const JOURNEY_BADGE_DARK: Record<JourneyTag, string> = {
+  Surging: 'bg-emerald-400/20 text-emerald-300 border border-emerald-400/35',
+  Rising:  'bg-blue-400/20 text-blue-300 border border-blue-400/35',
+  Stable:  'bg-slate-400/20 text-slate-300 border border-slate-400/35',
+  Sliding: 'bg-amber-400/20 text-amber-300 border border-amber-400/35',
+  Falling: 'bg-red-400/20 text-red-300 border border-red-400/35',
 }
 
 const ACTIVITY_BADGE: Record<ActivityStatus, string> = {
@@ -173,34 +173,29 @@ function computeHealthScore(
   const n    = revs.length
   if (n === 0 || revs.every(v => v === 0)) return { total: 0, strength: 0, consistency: 0, growth: 0, activity: 0 }
 
-  // Revenue Strength (0-100): revenue percentile among all stores
   const allTotals = allStores.map(s => revForMonths(s, ms)).sort((a, b) => a - b)
   const strength  = Math.round(pctileOf(revForMonths(store, ms), allTotals))
 
-  // Consistency (0-100): 100 = zero volatility
   const mean = revs.reduce((a, b) => a + b, 0) / n
   const coV  = mean === 0 ? 1 : Math.sqrt(revs.reduce((s, v) => s + (v - mean) ** 2, 0) / n) / mean
   const consistency = Math.round(Math.max(0, 100 * (1 - Math.min(coV, 1))))
 
-  // Growth (0-100): growth-% percentile among all stores
   const half = Math.max(1, Math.floor(n / 2))
   const earlyAvg  = revs.slice(0, half).reduce((a, b) => a + b, 0) / half
   const recentAvg = revs.slice(-half).reduce((a, b) => a + b, 0) / half
   const growthPct = earlyAvg === 0 ? null : (recentAvg - earlyAvg) / earlyAvg * 100
 
   const allGrowths = allStores.map(s => {
-    const sRevs  = ms.map(m => s.monthly_sales[m] ?? 0)
-    const sEarly = sRevs.slice(0, half).reduce((a, b) => a + b, 0) / half
+    const sRevs   = ms.map(m => s.monthly_sales[m] ?? 0)
+    const sEarly  = sRevs.slice(0, half).reduce((a, b) => a + b, 0) / half
     const sRecent = sRevs.slice(-half).reduce((a, b) => a + b, 0) / half
     return sEarly === 0 ? 0 : (sRecent - sEarly) / sEarly * 100
   }).sort((a, b) => a - b)
   const growth = Math.round(pctileOf(growthPct ?? 0, allGrowths))
 
-  // Activity (0-100): active months ratio
   const activeMonths = revs.filter(v => v > 0).length
   const activity     = Math.round((activeMonths / n) * 100)
 
-  // Weighted total
   const total = Math.round(0.40 * strength + 0.25 * consistency + 0.20 * growth + 0.15 * activity)
   return { total, strength, consistency, growth, activity }
 }
@@ -221,24 +216,30 @@ function AnimatedNumber({ value, className, decimals = 0 }: { value: number; cla
 
 // ── Score Donut ───────────────────────────────────────────────────────────────
 
-function ScoreDonut({ score, color, size = 110 }: { score: number; color: string; size?: number }) {
+function ScoreDonut({ score, color, size = 120 }: { score: number; color: string; size?: number }) {
   const r             = 38
   const circumference = 2 * Math.PI * r
   const filled        = (score / 100) * circumference
   return (
     <svg width={size} height={size} viewBox="0 0 100 100" className="shrink-0">
-      <circle cx={50} cy={50} r={r} fill="none" stroke="#e5e7eb" strokeWidth="9" />
+      <defs>
+        <filter id="donut-glow">
+          <feGaussianBlur stdDeviation="1.5" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+      </defs>
+      <circle cx={50} cy={50} r={r} fill="none" stroke="#e2e8f0" strokeWidth="9" />
       <motion.circle
         cx={50} cy={50} r={r} fill="none" stroke={color} strokeWidth="9"
-        strokeLinecap="round"
+        strokeLinecap="round" filter="url(#donut-glow)"
         initial={{ strokeDasharray: `0 ${circumference}`, strokeDashoffset: circumference * 0.25 }}
         animate={{ strokeDasharray: `${filled} ${circumference}`, strokeDashoffset: circumference * 0.25 }}
-        transition={{ duration: 1.1, ease: [0.22, 1, 0.36, 1] }}
+        transition={{ duration: 1.2, ease: [0.22, 1, 0.36, 1] }}
       />
-      <text x={50} y={44} textAnchor="middle" fill="#111827" fontSize="18"
-        fontWeight="bold" fontFamily="Inter,sans-serif">{score.toFixed(1)}</text>
-      <text x={50} y={57} textAnchor="middle" fill="#9ca3af" fontSize="8"
-        fontFamily="Inter,sans-serif">/ 100</text>
+      <text x={50} y={45} textAnchor="middle" fill="#0f172a" fontSize="20"
+        fontWeight="800" fontFamily="Inter,sans-serif">{score.toFixed(0)}</text>
+      <text x={50} y={58} textAnchor="middle" fill="#94a3b8" fontSize="8"
+        fontFamily="Inter,sans-serif">out of 100</text>
     </svg>
   )
 }
@@ -248,35 +249,20 @@ function ScoreDonut({ score, color, size = 110 }: { score: number; color: string
 function ScoreDimBar({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <div className="flex items-center gap-3">
-      <span className="text-[11px] text-gray-600 w-44 shrink-0">{label}</span>
-      <div className="flex-1 h-2 rounded-full bg-gray-100 overflow-hidden">
+      <span className="text-[11px] text-gray-500 w-44 shrink-0">{label}</span>
+      <div className="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
         <motion.div
           className="h-full rounded-full"
-          style={{ backgroundColor: color }}
+          style={{ background: `linear-gradient(to right, ${color}80, ${color})` }}
           initial={{ width: 0 }}
           animate={{ width: `${value}%` }}
-          transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
+          transition={{ duration: 1.0, ease: [0.22, 1, 0.36, 1] }}
         />
       </div>
       <span className="text-[11px] font-bold tabular-nums w-8 text-right" style={{ color }}>
         {value}
       </span>
     </div>
-  )
-}
-
-// ── KPI Chip ──────────────────────────────────────────────────────────────────
-
-function KPIChip({ label, value, valueClass }: { label: string; value: React.ReactNode; valueClass?: string }) {
-  return (
-    <motion.div
-      variants={kpiItem}
-      className="flex flex-col gap-0.5 px-3 py-2 border border-gray-200 bg-white rounded-lg min-w-0 shrink-0 cursor-default"
-      style={{ minWidth: 76 }}
-    >
-      <span className="text-[9px] font-bold uppercase tracking-[0.12em] text-gray-400 whitespace-nowrap">{label}</span>
-      <span className={cn('text-sm font-bold text-gray-900 tabular-nums whitespace-nowrap', valueClass)}>{value}</span>
-    </motion.div>
   )
 }
 
@@ -315,68 +301,78 @@ function StoreSelector({ stores, selectedId, selectedLabel, onSelect }: {
 
   return (
     <div ref={ref} className="relative">
-      {/* Trigger */}
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
         className={cn(
-          'flex items-center gap-2 h-9 pl-3 pr-2.5 rounded-lg border bg-white text-left transition-all shadow-sm',
-          open ? 'border-blue-400 ring-1 ring-blue-100' : 'border-gray-200 hover:border-gray-300',
+          'flex items-center gap-2 h-9 pl-3 pr-2.5 rounded-xl border bg-white text-left transition-all shadow-sm',
+          open
+            ? 'border-indigo-400 ring-2 ring-indigo-100 shadow-indigo-100'
+            : 'border-gray-200 hover:border-indigo-300 hover:shadow-md',
         )}
       >
-        <Search className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+        <Search className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
         <span className="text-sm max-w-[220px] truncate">
           {selectedLabel
             ? <span className="text-gray-800 font-medium">{selectedLabel}</span>
-            : <span className="text-gray-400">Type to filter…</span>}
+            : <span className="text-gray-400">Search stores…</span>}
         </span>
-        <svg className="h-3.5 w-3.5 text-gray-400 shrink-0 ml-1" viewBox="0 0 20 20" fill="currentColor">
+        <svg className={cn('h-3.5 w-3.5 text-gray-400 shrink-0 ml-1 transition-transform', open && 'rotate-180')} viewBox="0 0 20 20" fill="currentColor">
           <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
         </svg>
       </button>
 
-      {/* Dropdown */}
-      {open && (
-        <div className="absolute right-0 z-50 mt-1 w-72 rounded-lg border border-gray-200 bg-white shadow-xl overflow-hidden">
-          <div className="p-2 border-b border-gray-100">
-            <div className="flex items-center gap-2 px-2 py-1.5 rounded bg-gray-50 border border-gray-200">
-              <Search className="h-3.5 w-3.5 text-gray-400 shrink-0" />
-              <input
-                ref={inputRef}
-                className="flex-1 bg-transparent text-sm text-gray-800 placeholder:text-gray-400 outline-none"
-                placeholder="Search name, ID or state…"
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-              />
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -6, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -6, scale: 0.97 }}
+            transition={{ duration: 0.15 }}
+            className="absolute right-0 z-50 mt-1.5 w-72 rounded-xl border border-gray-200 bg-white shadow-xl overflow-hidden"
+          >
+            <div className="p-2 border-b border-gray-100 bg-gray-50/50">
+              <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-white border border-gray-200 shadow-sm">
+                <Search className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+                <input
+                  ref={inputRef}
+                  className="flex-1 bg-transparent text-sm text-gray-800 placeholder:text-gray-400 outline-none"
+                  placeholder="Name, ID or state…"
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                />
+              </div>
             </div>
-          </div>
-          <div className="max-h-72 overflow-y-auto">
-            {filtered.length === 0
-              ? <div className="px-4 py-6 text-center text-sm text-gray-400">No stores found</div>
-              : filtered.map(s => (
-                <button key={s.store_id} type="button"
-                  className={cn(
-                    'w-full px-4 py-2.5 text-left hover:bg-gray-50 transition-colors flex gap-3 items-center',
-                    s.store_id === selectedId && 'bg-blue-50',
-                  )}
-                  onClick={() => { onSelect(s.store_id); setOpen(false); setQuery('') }}>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium text-gray-800 truncate">{s.store_name ?? s.store_id}</div>
-                    <div className="text-[11px] text-gray-400 mt-0.5 flex gap-2">
-                      <span>{s.store_id}</span>
-                      {s.state && <span>· {s.state}</span>}
-                      {s.category && <span>· {s.category}</span>}
+            <div className="max-h-72 overflow-y-auto">
+              {filtered.length === 0
+                ? <div className="px-4 py-6 text-center text-sm text-gray-400">No stores found</div>
+                : filtered.map(s => (
+                  <button key={s.store_id} type="button"
+                    className={cn(
+                      'w-full px-4 py-2.5 text-left hover:bg-indigo-50/60 transition-colors flex gap-3 items-center',
+                      s.store_id === selectedId && 'bg-indigo-50',
+                    )}
+                    onClick={() => { onSelect(s.store_id); setOpen(false); setQuery('') }}>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-gray-800 truncate">{s.store_name ?? s.store_id}</div>
+                      <div className="text-[11px] text-gray-400 mt-0.5 flex gap-2">
+                        <span className="font-mono">{s.store_id}</span>
+                        {s.state && <span>· {s.state}</span>}
+                        {s.category && <span>· {s.category}</span>}
+                      </div>
                     </div>
-                  </div>
-                  {s.store_id === selectedId && <span className="h-1.5 w-1.5 rounded-full bg-blue-500 shrink-0" />}
-                </button>
-              ))}
-          </div>
-          <div className="px-4 py-1.5 border-t border-gray-100 text-[10px] text-gray-400">
-            {filtered.length} of {stores.length} stores
-          </div>
-        </div>
-      )}
+                    {s.store_id === selectedId && (
+                      <span className="h-1.5 w-1.5 rounded-full bg-indigo-500 shrink-0" />
+                    )}
+                  </button>
+                ))}
+            </div>
+            <div className="px-4 py-1.5 border-t border-gray-100 bg-gray-50/50 text-[10px] text-gray-400">
+              {filtered.length} of {stores.length} stores
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
@@ -388,11 +384,26 @@ interface Props { filters: FilterState; initialStoreId?: string | null }
 export default function StoreDeepDive({ filters, initialStoreId }: Props) {
   const { stores, months } = useDataContext()
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const autoSelected = useRef(false)
 
-  // When navigated from another tab with a pre-selected store
+  // Auto-select the highest-revenue store on first load
   useEffect(() => {
-    if (initialStoreId) setSelectedId(initialStoreId)
-  }, [initialStoreId])
+    if (autoSelected.current) return
+    if (initialStoreId) {
+      setSelectedId(initialStoreId)
+      autoSelected.current = true
+      return
+    }
+    if (stores.length > 0) {
+      const top = [...stores].sort((a, b) => {
+        const aRev = Object.values(a.monthly_sales).reduce((s, v) => s + v, 0)
+        const bRev = Object.values(b.monthly_sales).reduce((s, v) => s + v, 0)
+        return bRev - aRev
+      })[0]
+      setSelectedId(top.store_id)
+      autoSelected.current = true
+    }
+  }, [stores, initialStoreId])
 
   const fm = useMemo(() => {
     let m = months
@@ -436,43 +447,37 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
     const growthVal    = earlyAvgVal === 0 ? null : (recentAvgVal - earlyAvgVal) / earlyAvgVal * 100
     const tag          = journeyTag(growthVal)
 
-    // Health score (all sub-scores on 0-100)
     const hs = computeHealthScore(selectedStore, fm, stores)
     const t  = tier(hs.total)
 
-    // Rank at 3 phases
     const rankEarly  = computeRank(avgRev(selectedStore, earlyMs),  stores.map(s => avgRev(s, earlyMs)))
     const rankMid    = computeRank(avgRev(selectedStore, midMs),    stores.map(s => avgRev(s, midMs)))
     const rankRecent = computeRank(avgRev(selectedStore, recentMs), stores.map(s => avgRev(s, recentMs)))
     const rankImprovement = rankEarly - rankRecent
 
-    // Network + state rank
     const allRevs     = stores.map(s => revForMonths(s, fm))
     const networkRank = computeRank(totalRev, allRevs)
     const stateStores = stores.filter(s => s.state === selectedStore.state)
     const stateRevs   = stateStores.map(s => revForMonths(s, fm))
     const stateRank   = computeRank(totalRev, stateRevs)
 
-    // Month-by-month table
     const tableRows = fm.map((m, i) => {
       const rev  = selectedStore.monthly_sales[m] ?? 0
       const prev = i > 0 ? (selectedStore.monthly_sales[fm[i - 1]] ?? 0) : null
       const mom  = prev === null || prev === 0 ? null : (rev - prev) / prev * 100
-      const mRevs   = stores.map(s => s.monthly_sales[m] ?? 0)
-      const rank    = computeRank(rev, mRevs)
+      const mRevs    = stores.map(s => s.monthly_sales[m] ?? 0)
+      const rank     = computeRank(rev, mRevs)
       const activity = activityStatus(rev, mom)
       return { month: m, rev, mom, rank, total: stores.length, activity }
     })
 
-    // Waterfall
     const waterfallData = fm.map((m, i) => {
-      const rev    = selectedStore.monthly_sales[m] ?? 0
-      const prev   = i > 0 ? (selectedStore.monthly_sales[fm[i - 1]] ?? 0) : 0
+      const rev  = selectedStore.monthly_sales[m] ?? 0
+      const prev = i > 0 ? (selectedStore.monthly_sales[fm[i - 1]] ?? 0) : 0
       return { month: m, rev, change: i === 0 ? rev : rev - prev, isFirst: i === 0 }
     })
 
-    // Label for selector button
-    const selectorLabel = `${selectedStore.store_id} - ${fmtInr(totalRev, true)} ${tag}`
+    const selectorLabel = `${selectedStore.store_id} · ${fmtInr(totalRev, true)} · ${tag}`
 
     return {
       revByMonth, rolling, maxIdx, minIdx, hs, t, growthVal, tag,
@@ -484,15 +489,21 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
     }
   }, [selectedStore, stores, fm])
 
-  const cardCls = 'rounded-xl border border-gray-200 bg-white shadow-sm'
+  const cardBase = 'rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden'
 
-  // ── Empty / not-selected state ────────────────────────────────────────────
+  // ── Empty / loading state ─────────────────────────────────────────────────
 
   if (!selectedStore || !derived) {
+    const topStores = [...stores]
+      .sort((a, b) => {
+        const aRev = Object.values(a.monthly_sales).reduce((s, v) => s + v, 0)
+        const bRev = Object.values(b.monthly_sales).reduce((s, v) => s + v, 0)
+        return bRev - aRev
+      })
+      .slice(0, 6)
+
     return (
       <div className="space-y-5">
-
-        {/* Header */}
         <motion.div
           initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
@@ -501,32 +512,57 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
           <div>
             <h2 className="text-base font-bold text-gray-900">Store Journey — Deep Dive</h2>
             <p className="text-[11px] text-gray-500 mt-0.5">
-              Full analytical profile, rank journey, root cause and recommended actions for the selected store
+              Full analytical profile, rank journey, health score and recommended actions
             </p>
           </div>
           <StoreSelector stores={stores} selectedId={null} onSelect={setSelectedId} />
         </motion.div>
 
-        <div className={cn(cardCls, 'min-h-[440px] flex flex-col items-center justify-center gap-4 p-8')}>
-          <div className="h-14 w-14 rounded-2xl bg-gradient-to-br from-blue-500/10 to-indigo-400/10 flex items-center justify-center">
-            <Building2 className="h-6 w-6 text-blue-500" />
+        {topStores.length > 0 ? (
+          <div>
+            <p className="text-xs text-gray-400 mb-3 font-medium">Top stores by revenue — click to explore</p>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+              {topStores.map((s, i) => {
+                const rev = Object.values(s.monthly_sales).reduce((a, b) => a + b, 0)
+                return (
+                  <motion.button
+                    key={s.store_id}
+                    initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.06, type: 'spring', stiffness: 300, damping: 26 }}
+                    onClick={() => setSelectedId(s.store_id)}
+                    className="flex flex-col items-start gap-1.5 p-3.5 rounded-xl border border-gray-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/40 hover:shadow-md transition-all text-left group"
+                  >
+                    <div className="h-7 w-7 rounded-lg bg-indigo-50 flex items-center justify-center group-hover:bg-indigo-100 transition-colors">
+                      <Building2 className="h-3.5 w-3.5 text-indigo-500" />
+                    </div>
+                    <div className="min-w-0 w-full">
+                      <div className="text-xs font-bold text-gray-800 truncate">{s.store_name ?? s.store_id}</div>
+                      <div className="text-[10px] text-gray-400 font-mono mt-0.5">{s.store_id}</div>
+                    </div>
+                    <div className="text-sm font-bold text-indigo-600">{fmtInr(rev, true)}</div>
+                  </motion.button>
+                )
+              })}
+            </div>
           </div>
-          <div className="text-center">
-            <h3 className="text-lg font-semibold text-gray-800">Select a Store</h3>
-            <p className="mt-1 text-sm text-gray-400 max-w-xs">
-              Search or select a store from the dropdown to explore its full revenue history,
-              rank journey, health score, and recommended actions.
-            </p>
+        ) : (
+          <div className={cn(cardBase, 'min-h-[320px] flex flex-col items-center justify-center gap-4 p-8')}>
+            <div className="h-14 w-14 rounded-2xl bg-gradient-to-br from-indigo-50 to-indigo-100 flex items-center justify-center">
+              <Building2 className="h-6 w-6 text-indigo-400" />
+            </div>
+            <div className="text-center">
+              <h3 className="text-base font-semibold text-gray-700">No stores loaded</h3>
+              <p className="mt-1 text-sm text-gray-400">Upload data to explore store analytics</p>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     )
   }
 
   const {
     revByMonth, rolling, maxIdx, minIdx, hs, t, growthVal, tag,
-    totalRev, avgMonthRev, activeMonths, earlyAvgVal, recentAvgVal,
-    earlyHalf, recentHalf,
+    totalRev, avgMonthRev, activeMonths,
     rankEarly, rankMid, rankRecent, rankImprovement,
     networkRank, stateRank, stateTotal,
     tableRows, waterfallData, selectorLabel,
@@ -534,19 +570,17 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
 
   const healthColor = HEALTH_HEX[t]
 
-  // Bar colour gradient: recent months darker navy, older months gray-blue
+  // Bar colours: slate-400 (#94a3b8) → indigo-500 (#6366f1) by recency
   const barColors = fm.map((_, i) => {
     if (i === maxIdx) return '#10b981'
     if (i === minIdx && revByMonth[i] > 0) return '#ef4444'
     const recency = i / Math.max(fm.length - 1, 1)
-    // interpolate from #94a3b8 (gray) → #1e3a5f (dark navy)
-    const r = Math.round(148 - recency * (148 - 30))
-    const g = Math.round(163 - recency * (163 - 58))
-    const b = Math.round(184 - recency * (184 - 95))
+    const r = Math.round(148 - recency * 49)
+    const g = Math.round(163 - recency * 61)
+    const b = Math.round(184 + recency * 57)
     return `rgb(${r},${g},${b})`
   })
 
-  // Peak / low annotations
   const annotations: object[] = []
   if (fm.length > 0) {
     annotations.push({
@@ -564,7 +598,7 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
         showarrow: true, arrowhead: 2, arrowsize: 0.8, arrowcolor: '#ef4444',
         font: { color: '#ef4444', size: 10 },
         bgcolor: 'rgba(239,68,68,0.08)', bordercolor: '#ef4444', borderwidth: 1, borderpad: 3,
-        ax: 0, ay: 38,
+        ax: 0, ay: -38,
       })
     }
   }
@@ -583,13 +617,13 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
       {/* ── Page Header ── */}
       <motion.div
         initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
+        transition={{ duration: 0.28 }}
         className="flex items-start justify-between gap-4 flex-wrap"
       >
         <div>
           <h2 className="text-base font-bold text-gray-900">Store Journey — Deep Dive</h2>
           <p className="text-[11px] text-gray-500 mt-0.5">
-            Full analytical profile, rank journey, root cause and recommended actions for the selected store
+            Full analytical profile, rank journey, health score and recommended actions
           </p>
         </div>
         <StoreSelector
@@ -598,295 +632,394 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
         />
       </motion.div>
 
-      {/* ── KPI Chips Row 1 ── */}
-      <motion.div
-        key={`chips-${selectedId}`}
-        variants={kpiContainer} initial="hidden" animate="show"
-        className="flex gap-2 overflow-x-auto pb-0.5"
-        style={{ scrollbarWidth: 'none' }}
-      >
-        <KPIChip label="Store ID"     value={selectedStore.store_id} />
-        {selectedStore.state    && <KPIChip label="State"         value={selectedStore.state} />}
-        {selectedStore.category && <KPIChip label="Item Category" value={selectedStore.category} />}
-        {growthVal !== null && (
-          <KPIChip
-            label="Growth %"
-            value={fmtPct(growthVal)}
-            valueClass={growthVal >= 0 ? 'text-emerald-600' : 'text-red-600'}
-          />
-        )}
-        <KPIChip label="Total Revenue" value={fmtInr(totalRev, true)} />
-        <KPIChip
-          label="Early Rev"
-          value={fmtInr(earlyAvgVal * Math.max(1, earlyHalf.length), false)}
-        />
-        <KPIChip
-          label="Recent Rev"
-          value={fmtInr(recentAvgVal * Math.max(1, recentHalf.length), false)}
-        />
-        <KPIChip label="Months Active" value={`${activeMonths} / ${fm.length}`} />
-        <KPIChip label="Network Rank"  value={`#${networkRank} / ${stores.length}`} />
-      </motion.div>
-
-      {/* ── KPI Chips Row 2 ── */}
-      <motion.div
-        key={`chips2-${selectedId}`}
-        variants={kpiContainer} initial="hidden" animate="show"
-        className="flex gap-2"
-      >
-        {selectedStore.state && (
-          <KPIChip label="State Rank" value={`#${stateRank} / ${stateTotal}`} />
-        )}
-        {/* Status chip */}
+      {/* ── Animate entire content when store changes ── */}
+      <AnimatePresence mode="wait">
         <motion.div
-          variants={kpiItem}
-          className="flex flex-col gap-1 px-3 py-2 border border-gray-200 bg-white rounded-lg cursor-default shrink-0"
+          key={selectedId}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18 }}
+          className="space-y-4"
         >
-          <span className="text-[9px] font-bold uppercase tracking-[0.12em] text-gray-400">Status</span>
-          <span className={cn('text-xs font-bold px-2.5 py-0.5 rounded-full self-start whitespace-nowrap', HEALTH_BADGE[t])}>
-            {t}
-          </span>
-        </motion.div>
-      </motion.div>
 
-      {/* ── Row 1: Revenue Trend | Rank Journey ── */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {/* ── Store Hero Banner ── */}
+          <motion.div
+            initial={{ opacity: 0, y: -14 }} animate={{ opacity: 1, y: 0 }}
+            transition={{ type: 'spring', stiffness: 320, damping: 30, delay: 0.04 }}
+            className="rounded-2xl overflow-hidden shadow-lg"
+            style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 55%, #1e3a5f 100%)' }}
+          >
+            {/* health-color top strip */}
+            <div className="h-[3px]" style={{ background: `linear-gradient(to right, ${healthColor}, ${healthColor}40)` }} />
 
-        {/* Revenue Trend & Moving Average */}
-        <motion.div {...panelSpring(0.08)} className={cn(cardCls, 'p-4')}>
-          <h3 className="text-sm font-semibold text-gray-800">Revenue Trend & Moving Average</h3>
-          <p className="text-[11px] text-gray-500 mt-0.5 mb-3">
-            Monthly revenue with 3-month moving average · trend direction &amp; seasonality below
-          </p>
-          <Plot
-            data={[
-              {
-                type: 'bar',
-                name: 'Revenue',
-                x: fm,
-                y: revByMonth,
-                marker: { color: barColors, opacity: 0.88 },
-                hovertemplate: '<b>%{x}</b><br>Revenue: ₹%{y:,.0f}<extra></extra>',
-              },
-              {
-                type: 'scatter',
-                mode: 'lines+markers',
-                name: '3-mo MA',
-                x: fm.filter((_, i) => rolling[i] !== null),
-                y: rolling.filter((v): v is number => v !== null),
-                line: { color: '#f59e0b', width: 2.5, dash: 'dot' as const },
-                marker: { color: '#f59e0b', size: 4 },
-                hovertemplate: '<b>%{x}</b><br>3M Avg: ₹%{y:,.0f}<extra></extra>',
-              },
-            ]}
-            layout={{
-              paper_bgcolor: 'rgba(0,0,0,0)',
-              plot_bgcolor:  'rgba(0,0,0,0)',
-              font:   { color: PT.font, family: 'Inter, sans-serif', size: 11 },
-              legend: {
-                bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, size: 10 },
-                orientation: 'h' as const, x: 0, y: -0.22,
-              },
-              xaxis: { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true },
-              yaxis: { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, tickformat: ',.0s', title: { text: '' } },
-              hovermode: 'x unified' as const,
-              margin: { l: 52, r: 12, t: 12, b: 80 },
-              height: 270,
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              annotations: annotations as any[],
-            }}
-            config={{ displayModeBar: false, responsive: true }}
-            style={{ width: '100%' }}
-          />
-          {/* Footer row */}
-          <div className="flex items-center gap-4 mt-1 text-[11px] text-gray-500 flex-wrap">
-            <span>Trend: <span className={cn('font-semibold',
-              growthVal !== null && growthVal >= 0 ? 'text-emerald-600' : 'text-red-500')}>
-              {growthVal !== null ? (growthVal >= 0 ? '↑ Upward' : '↓ Downward') : 'N/A'}
-            </span></span>
-            <span>Pattern: <span className="font-medium text-gray-600">{revPattern}</span></span>
-            <span>Peak: <span className="font-medium text-gray-700">{fm[maxIdx]}</span></span>
-          </div>
-        </motion.div>
+            <div className="px-6 py-5">
+              <div className="flex flex-col lg:flex-row items-start lg:items-center gap-5">
 
-        {/* Rank Journey */}
-        <motion.div {...panelSpring(0.13)} className={cn(cardCls, 'p-4')}>
-          <h3 className="text-sm font-semibold text-gray-800">Rank Journey — Early → Mid → Recent</h3>
-          <p className="text-[11px] text-gray-500 mt-0.5 mb-3">
-            Lower is better · how the store's network rank moved across phases
-            {rankImprovement > 0 && (
-              <span className="ml-2 font-semibold text-emerald-600">
-                ▲ improved {rankImprovement} positions
-              </span>
-            )}
-            {rankImprovement < 0 && (
-              <span className="ml-2 font-semibold text-red-500">
-                ▼ dropped {Math.abs(rankImprovement)} positions
-              </span>
-            )}
-          </p>
-          <Plot
-            data={[{
-              type: 'scatter',
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              mode: 'lines+markers+text' as any,
-              x: ['Early', 'Mid', 'Recent'],
-              y: [rankEarly, rankMid, rankRecent],
-              text: [`#${rankEarly}`, `#${rankMid}`, `#${rankRecent}`],
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              textposition: ['top center', 'top center', 'bottom center'] as any,
-              textfont: { color: '#374151', size: 11, family: 'Inter, sans-serif' },
-              line: { color: '#10b981', width: 3 },
-              marker: {
-                color: ['#3b82f6', '#8b5cf6', '#10b981'],
-                size: 13,
-                line: { color: '#ffffff', width: 2.5 },
-              },
-              hovertemplate: '<b>%{x}</b><br>Rank #%{y}<extra></extra>',
-            }]}
-            layout={{
-              paper_bgcolor: 'rgba(0,0,0,0)',
-              plot_bgcolor:  'rgba(0,0,0,0)',
-              font:   { color: PT.font, family: 'Inter, sans-serif', size: 11 },
-              xaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true },
-              yaxis:  {
-                gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true,
-                autorange: 'reversed' as const,
-                title: { text: 'Network Rank (lower = better)' },
-              },
-              showlegend: false,
-              margin: { l: 70, r: 32, t: 24, b: 50 },
-              height: 270,
-            }}
-            config={{ displayModeBar: false, responsive: true }}
-            style={{ width: '100%' }}
-          />
-        </motion.div>
-      </div>
-
-      {/* ── Row 2: Health Score | Waterfall ── */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
-
-        {/* Store Health Score */}
-        <motion.div {...panelSpring(0.18)} className={cn(cardCls, 'p-5 lg:col-span-2')}>
-          <h3 className="text-sm font-semibold text-gray-800">Store Health Score</h3>
-          <p className="text-[11px] text-gray-500 mt-0.5 mb-4">
-            40% revenue · 25% consistency · 20% growth · 15% activity
-          </p>
-
-          <div className="flex items-center gap-5">
-            <ScoreDonut score={hs.total} color={healthColor} size={100} />
-            <div className="flex-1 space-y-3.5">
-              <ScoreDimBar label="Revenue Strength (40%)" value={hs.strength}    color="#3b82f6" />
-              <ScoreDimBar label="Consistency (25%)"      value={hs.consistency} color="#6366f1" />
-              <ScoreDimBar label="Growth (20%)"           value={hs.growth}      color="#10b981" />
-              <ScoreDimBar label="Activity (15%)"         value={hs.activity}    color="#f59e0b" />
-            </div>
-          </div>
-
-          <p className={cn('mt-4 text-[11px] font-medium', HEALTH_LABEL_COLOR[t])}>
-            {HEALTH_LABEL[t]}
-          </p>
-        </motion.div>
-
-        {/* Revenue Journey Waterfall */}
-        <motion.div {...panelSpring(0.23)} className={cn(cardCls, 'p-4 lg:col-span-3')}>
-          <h3 className="text-sm font-semibold text-gray-800">Revenue Journey Waterfall</h3>
-          <p className="text-[11px] text-gray-500 mt-0.5 mb-3">
-            How the store moved from early baseline to recent revenue, month by month
-          </p>
-          <Plot
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            data={[{
-              type:        'waterfall',
-              orientation: 'v',
-              x:           waterfallData.map(d => d.month),
-              y:           waterfallData.map(d => d.change),
-              measure:     waterfallData.map((_, i) => i === 0 ? 'absolute' : 'relative'),
-              connector:   { line: { color: '#e5e7eb', width: 1 } },
-              increasing:  { marker: { color: '#10b981', opacity: 0.85 } },
-              decreasing:  { marker: { color: '#ef4444', opacity: 0.85 } },
-              totals:      { marker: { color: '#3b82f6', opacity: 0.85 } },
-              texttemplate: '%{y:+,.0s}',
-              textfont:    { size: 9, color: '#374151' },
-              hovertemplate: '<b>%{x}</b><br>₹%{y:+,.0f}<extra></extra>',
-            } as any]}
-            layout={{
-              paper_bgcolor: 'rgba(0,0,0,0)',
-              plot_bgcolor:  'rgba(0,0,0,0)',
-              font:   { color: PT.font, family: 'Inter, sans-serif', size: 11 },
-              xaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true },
-              yaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, tickformat: ',.0s' },
-              showlegend: false,
-              margin: { l: 52, r: 12, t: 12, b: 80 },
-              height: 320,
-            }}
-            config={{ displayModeBar: false, responsive: true }}
-            style={{ width: '100%' }}
-          />
-        </motion.div>
-      </div>
-
-      {/* ── Store Journey Timeline ── */}
-      <motion.div {...panelSpring(0.28)} className={cn(cardCls, 'overflow-hidden')}>
-        <div className="px-5 py-3 border-b border-gray-100">
-          <h3 className="text-sm font-semibold text-gray-800">Store Journey Timeline</h3>
-          <p className="text-[11px] text-gray-500 mt-0.5">
-            Month-wise revenue, MoM growth, network rank and activity status
-          </p>
-        </div>
-        <div className="overflow-x-auto" style={{ maxHeight: 380, overflowY: 'auto' }}>
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 z-10">
-              <tr style={{ background: '#1e293b' }}>
-                <th className="px-5 py-2.5 text-left text-xs font-semibold tracking-wider text-amber-400 whitespace-nowrap">Month</th>
-                <th className="px-5 py-2.5 text-left text-xs font-semibold tracking-wider text-gray-300 whitespace-nowrap">Revenue</th>
-                <th className="px-5 py-2.5 text-left text-xs font-semibold tracking-wider text-gray-300 whitespace-nowrap">MoM %</th>
-                <th className="px-5 py-2.5 text-left text-xs font-semibold tracking-wider text-gray-300 whitespace-nowrap">Network Rank</th>
-                <th className="px-5 py-2.5 text-left text-xs font-semibold tracking-wider text-gray-300 whitespace-nowrap">Activity</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tableRows.map(row => (
-                <tr key={row.month} className="border-b border-gray-100 hover:bg-gray-50/80 transition-colors">
-                  <td className="px-5 py-2.5 text-gray-700 font-semibold whitespace-nowrap">{row.month}</td>
-                  <td className="px-5 py-2.5 text-gray-800 tabular-nums whitespace-nowrap">
-                    {row.rev > 0 ? fmtInr(row.rev, false) : <span className="text-gray-300">—</span>}
-                  </td>
-                  <td className={cn(
-                    'px-5 py-2.5 tabular-nums text-sm font-semibold whitespace-nowrap',
-                    row.mom === null ? 'text-gray-300'
-                      : row.mom >= 0 ? 'text-emerald-600' : 'text-red-500',
-                  )}>
-                    {row.mom === null ? '—' : fmtPct(row.mom)}
-                  </td>
-                  <td className="px-5 py-2.5 whitespace-nowrap">
-                    {row.rev > 0 ? (
-                      <span className="text-sm text-gray-600 tabular-nums">
-                        #{row.rank} / {row.total}
-                      </span>
-                    ) : <span className="text-gray-300">—</span>}
-                  </td>
-                  <td className="px-5 py-2.5">
-                    <span className={cn(
-                      'inline-flex items-center gap-1.5 text-[11px] font-semibold whitespace-nowrap',
-                      ACTIVITY_BADGE[row.activity],
-                    )}>
-                      <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', ACTIVITY_DOT[row.activity])} />
-                      {row.activity}
+                {/* Identity */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <div
+                      className="h-9 w-9 rounded-xl flex items-center justify-center shrink-0"
+                      style={{ background: `${healthColor}20`, border: `1px solid ${healthColor}35` }}
+                    >
+                      <Building2 className="h-4.5 w-4.5" style={{ color: healthColor }} />
+                    </div>
+                    <h2 className="text-xl font-bold text-white leading-tight">
+                      {selectedStore.store_name ?? selectedStore.store_id}
+                    </h2>
+                    <span className={cn('text-xs font-bold px-2.5 py-1 rounded-full shrink-0', HEALTH_BADGE_DARK[t])}>
+                      {t}
                     </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {/* Avg footer */}
-        <div className="px-5 py-2 border-t border-gray-100 bg-gray-50 flex items-center gap-6 text-[11px] text-gray-500">
-          <span>Avg / Month: <span className="font-semibold text-gray-700">{fmtInr(avgMonthRev, false)}</span></span>
-          <span>Active months: <span className="font-semibold text-gray-700">{activeMonths} / {fm.length}</span></span>
-        </div>
-      </motion.div>
+                    <span className={cn('text-xs font-bold px-2.5 py-1 rounded-full shrink-0', JOURNEY_BADGE_DARK[tag])}>
+                      {tag}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-2 text-xs text-white/40 flex-wrap">
+                    <span className="font-mono text-white/50">{selectedStore.store_id}</span>
+                    {selectedStore.state    && <><span>·</span><span>{selectedStore.state}</span></>}
+                    {selectedStore.category && <><span>·</span><span>{selectedStore.category}</span></>}
+                  </div>
+                </div>
+
+                {/* Key stats */}
+                <div className="flex gap-2.5 flex-wrap">
+                  {/* Total Revenue */}
+                  <div className="flex flex-col px-4 py-3 rounded-xl bg-white/10 border border-white/10 min-w-[90px]">
+                    <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-white/40 whitespace-nowrap">Total Revenue</span>
+                    <span className="text-[17px] font-bold text-white mt-1 tabular-nums leading-none">{fmtInr(totalRev, true)}</span>
+                  </div>
+                  {/* Network Rank */}
+                  <div className="flex flex-col px-4 py-3 rounded-xl bg-white/10 border border-white/10 min-w-[90px]">
+                    <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-white/40 whitespace-nowrap">Network Rank</span>
+                    <span className="text-[17px] font-bold text-white mt-1 tabular-nums leading-none">#{networkRank}</span>
+                    <span className="text-[10px] text-white/30 mt-0.5">of {stores.length}</span>
+                  </div>
+                  {/* State Rank */}
+                  {selectedStore.state && (
+                    <div className="flex flex-col px-4 py-3 rounded-xl bg-white/10 border border-white/10 min-w-[90px]">
+                      <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-white/40 whitespace-nowrap">State Rank</span>
+                      <span className="text-[17px] font-bold text-white mt-1 tabular-nums leading-none">#{stateRank}</span>
+                      <span className="text-[10px] text-white/30 mt-0.5">of {stateTotal}</span>
+                    </div>
+                  )}
+                  {/* Growth */}
+                  {growthVal !== null && (
+                    <div className="flex flex-col px-4 py-3 rounded-xl bg-white/10 border border-white/10 min-w-[90px]">
+                      <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-white/40 whitespace-nowrap">Growth</span>
+                      <span
+                        className="text-[17px] font-bold mt-1 tabular-nums leading-none"
+                        style={{ color: growthVal >= 0 ? '#34d399' : '#f87171' }}
+                      >{fmtPct(growthVal)}</span>
+                    </div>
+                  )}
+                  {/* Active Months */}
+                  <div className="flex flex-col px-4 py-3 rounded-xl bg-white/10 border border-white/10 min-w-[90px]">
+                    <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-white/40 whitespace-nowrap">Active Months</span>
+                    <span className="text-[17px] font-bold text-white mt-1 tabular-nums leading-none">{activeMonths}</span>
+                    <span className="text-[10px] text-white/30 mt-0.5">of {fm.length}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+
+          {/* ── Row 1: Revenue Trend | Rank Journey ── */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+
+            {/* Revenue Trend */}
+            <motion.div {...panelSpring(0.08)} className={cardBase}>
+              <div className="h-[3px] bg-gradient-to-r from-indigo-500 to-indigo-300" />
+              <div className="p-4">
+                <h3 className="text-sm font-semibold text-gray-800">Revenue Trend & Moving Average</h3>
+                <p className="text-[11px] text-gray-500 mt-0.5 mb-3">
+                  Monthly revenue with 3-month moving average · trend direction &amp; seasonality below
+                </p>
+                <Plot
+                  data={[
+                    {
+                      type: 'bar',
+                      name: 'Revenue',
+                      x: fm,
+                      y: revByMonth,
+                      marker: { color: barColors, opacity: 0.9 },
+                      hovertemplate: '<b>%{x}</b><br>Revenue: ₹%{y:,.0f}<extra></extra>',
+                    },
+                    {
+                      type: 'scatter',
+                      mode: 'lines+markers',
+                      name: '3-mo MA',
+                      x: fm.filter((_, i) => rolling[i] !== null),
+                      y: rolling.filter((v): v is number => v !== null),
+                      line: { color: '#f59e0b', width: 2.5, dash: 'dot' as const },
+                      marker: { color: '#f59e0b', size: 4 },
+                      hovertemplate: '<b>%{x}</b><br>3M Avg: ₹%{y:,.0f}<extra></extra>',
+                    },
+                  ]}
+                  layout={{
+                    paper_bgcolor: 'rgba(0,0,0,0)',
+                    plot_bgcolor:  'rgba(0,0,0,0)',
+                    font:   { color: PT.font, family: 'Inter, sans-serif', size: 11 },
+                    legend: {
+                      bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, size: 10 },
+                      orientation: 'h' as const, x: 0, y: -0.22,
+                    },
+                    xaxis: { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true },
+                    yaxis: { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, tickformat: ',.0s', title: { text: '' } },
+                    hovermode: 'x unified' as const,
+                    margin: { l: 52, r: 12, t: 12, b: 80 },
+                    height: 270,
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    annotations: annotations as any[],
+                  }}
+                  config={{ displayModeBar: false, responsive: true }}
+                  style={{ width: '100%' }}
+                />
+                <div className="flex items-center gap-4 mt-1 text-[11px] text-gray-500 flex-wrap">
+                  <span>Trend: <span className={cn('font-semibold',
+                    growthVal !== null && growthVal >= 0 ? 'text-emerald-600' : 'text-red-500')}>
+                    {growthVal !== null ? (growthVal >= 0 ? '↑ Upward' : '↓ Downward') : 'N/A'}
+                  </span></span>
+                  <span>Pattern: <span className="font-medium text-gray-600">{revPattern}</span></span>
+                  <span>Peak: <span className="font-medium text-gray-700">{fm[maxIdx]}</span></span>
+                </div>
+              </div>
+            </motion.div>
+
+            {/* Rank Journey */}
+            <motion.div {...panelSpring(0.13)} className={cardBase}>
+              <div className="h-[3px] bg-gradient-to-r from-emerald-500 to-emerald-300" />
+              <div className="p-4">
+                <h3 className="text-sm font-semibold text-gray-800">Rank Journey — Early → Mid → Recent</h3>
+                <p className="text-[11px] text-gray-500 mt-0.5 mb-1">
+                  How the store's network rank moved across phases
+                  {rankImprovement > 0 && (
+                    <span className="ml-2 font-semibold text-emerald-600">
+                      ▲ improved {rankImprovement} positions
+                    </span>
+                  )}
+                  {rankImprovement < 0 && (
+                    <span className="ml-2 font-semibold text-red-500">
+                      ▼ dropped {Math.abs(rankImprovement)} positions
+                    </span>
+                  )}
+                </p>
+                {/* Rank calculation explanation */}
+                <div className="mb-3 px-3 py-2 rounded-lg bg-slate-50 border border-slate-100 text-[10.5px] text-gray-500 leading-relaxed">
+                  <span className="font-semibold text-gray-600">Rank #1</span> = highest-revenue store in the network.
+                  Each phase rank compares this store's <span className="font-medium text-gray-700">average monthly revenue</span> in
+                  that time slice against every other store — stores with higher average revenue rank above.
+                  {' '}<span className="font-semibold text-emerald-600">Rank moving up on this chart = climbing toward #1</span>{' '}
+                  (axis is inverted so better rank always appears higher).
+                </div>
+                <Plot
+                  data={[{
+                    type: 'scatter',
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    mode: 'lines+markers+text' as any,
+                    x: ['Early', 'Mid', 'Recent'],
+                    y: [rankEarly, rankMid, rankRecent],
+                    text: [`#${rankEarly}`, `#${rankMid}`, `#${rankRecent}`],
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    textposition: ['top center', 'top center', 'bottom center'] as any,
+                    textfont: { color: '#374151', size: 11, family: 'Inter, sans-serif' },
+                    line: { color: '#10b981', width: 3 },
+                    marker: {
+                      color: ['#6366f1', '#8b5cf6', '#10b981'],
+                      size: 14,
+                      line: { color: '#ffffff', width: 2.5 },
+                    },
+                    hovertemplate: '<b>%{x}</b><br>Rank #%{y}<extra></extra>',
+                  }]}
+                  layout={{
+                    paper_bgcolor: 'rgba(0,0,0,0)',
+                    plot_bgcolor:  'rgba(0,0,0,0)',
+                    font:   { color: PT.font, family: 'Inter, sans-serif', size: 11 },
+                    xaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true },
+                    yaxis:  {
+                      gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true,
+                      autorange: 'reversed' as const,
+                      title: { text: 'Network Rank' },
+                    },
+                    showlegend: false,
+                    margin: { l: 70, r: 32, t: 24, b: 50 },
+                    height: 270,
+                  }}
+                  config={{ displayModeBar: false, responsive: true }}
+                  style={{ width: '100%' }}
+                />
+              </div>
+            </motion.div>
+          </div>
+
+          {/* ── Row 2: Health Score | Waterfall ── */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
+
+            {/* Store Health Score */}
+            <motion.div {...panelSpring(0.18)} className={cn(cardBase, 'lg:col-span-2')}>
+              <div className="h-[3px]" style={{ background: `linear-gradient(to right, ${healthColor}, ${healthColor}50)` }} />
+              <div className="p-5">
+                <h3 className="text-sm font-semibold text-gray-800">Store Health Score</h3>
+                <p className="text-[11px] text-gray-500 mt-0.5 mb-4">
+                  40% revenue · 25% consistency · 20% growth · 15% activity
+                </p>
+
+                <div className="flex items-center gap-5">
+                  <div className="relative">
+                    <ScoreDonut score={hs.total} color={healthColor} size={116} />
+                    <div
+                      className="absolute inset-0 rounded-full opacity-20 blur-lg"
+                      style={{ background: healthColor }}
+                    />
+                  </div>
+                  <div className="flex-1 space-y-3.5">
+                    <ScoreDimBar label="Revenue Strength (40%)" value={hs.strength}    color="#6366f1" />
+                    <ScoreDimBar label="Consistency (25%)"      value={hs.consistency} color="#8b5cf6" />
+                    <ScoreDimBar label="Growth (20%)"           value={hs.growth}      color="#10b981" />
+                    <ScoreDimBar label="Activity (15%)"         value={hs.activity}    color="#f59e0b" />
+                  </div>
+                </div>
+
+                <div className="mt-4 flex items-center gap-2">
+                  <span className={cn('text-xs font-bold px-2.5 py-1 rounded-full', HEALTH_BADGE[t])}>
+                    {t}
+                  </span>
+                  <p className={cn('text-[11px] font-medium', HEALTH_LABEL_COLOR[t])}>
+                    {HEALTH_LABEL[t]}
+                  </p>
+                </div>
+
+                {/* Health score calculation breakdown */}
+                <div className="mt-3 px-3 py-2.5 rounded-lg bg-slate-50 border border-slate-100 space-y-1.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-2">How it's scored</p>
+                  {([
+                    { dot: '#6366f1', label: 'Revenue Strength · 40%', desc: 'Revenue percentile vs all stores in the period — ranks your total output' },
+                    { dot: '#8b5cf6', label: 'Consistency · 25%',      desc: 'Inverse of revenue volatility (CoV) — steady month-on-month = higher score' },
+                    { dot: '#10b981', label: 'Growth · 20%',           desc: 'Half-period growth-rate percentile — compares your trajectory to every store' },
+                    { dot: '#f59e0b', label: 'Activity · 15%',         desc: '% of months with non-zero revenue — penalises dormant periods' },
+                  ] as const).map(({ dot, label, desc }) => (
+                    <div key={label} className="flex items-start gap-2 text-[10.5px]">
+                      <span className="mt-0.5 h-2 w-2 rounded-full shrink-0" style={{ background: dot }} />
+                      <div>
+                        <span className="font-semibold text-gray-600">{label}:</span>
+                        <span className="text-gray-400 ml-1">{desc}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+
+            {/* Revenue Journey Waterfall */}
+            <motion.div {...panelSpring(0.23)} className={cn(cardBase, 'lg:col-span-3')}>
+              <div className="h-[3px] bg-gradient-to-r from-blue-500 to-sky-400" />
+              <div className="p-4">
+                <h3 className="text-sm font-semibold text-gray-800">Revenue Journey Waterfall</h3>
+                <p className="text-[11px] text-gray-500 mt-0.5 mb-3">
+                  How the store moved from early baseline to recent revenue, month by month
+                </p>
+                <Plot
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  data={[{
+                    type:        'waterfall',
+                    orientation: 'v',
+                    x:           waterfallData.map(d => d.month),
+                    y:           waterfallData.map(d => d.change),
+                    measure:     waterfallData.map((_, i) => i === 0 ? 'absolute' : 'relative'),
+                    connector:   { line: { color: '#e2e8f0', width: 1 } },
+                    increasing:  { marker: { color: '#10b981', opacity: 0.88 } },
+                    decreasing:  { marker: { color: '#ef4444', opacity: 0.88 } },
+                    totals:      { marker: { color: '#6366f1', opacity: 0.88 } },
+                    texttemplate: '%{y:+,.0s}',
+                    textfont:    { size: 9, color: '#374151' },
+                    hovertemplate: '<b>%{x}</b><br>₹%{y:+,.0f}<extra></extra>',
+                  } as any]}
+                  layout={{
+                    paper_bgcolor: 'rgba(0,0,0,0)',
+                    plot_bgcolor:  'rgba(0,0,0,0)',
+                    font:   { color: PT.font, family: 'Inter, sans-serif', size: 11 },
+                    xaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true },
+                    yaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, tickformat: ',.0s' },
+                    showlegend: false,
+                    margin: { l: 52, r: 12, t: 12, b: 80 },
+                    height: 320,
+                  }}
+                  config={{ displayModeBar: false, responsive: true }}
+                  style={{ width: '100%' }}
+                />
+              </div>
+            </motion.div>
+          </div>
+
+          {/* ── Store Journey Timeline ── */}
+          <motion.div {...panelSpring(0.28)} className={cardBase}>
+            <div className="h-[3px] bg-gradient-to-r from-slate-600 to-slate-400" />
+            <div className="px-5 py-3 border-b border-gray-100">
+              <h3 className="text-sm font-semibold text-gray-800">Store Journey Timeline</h3>
+              <p className="text-[11px] text-gray-500 mt-0.5">
+                Month-wise revenue, MoM growth, network rank and activity status
+              </p>
+            </div>
+            <div className="overflow-x-auto" style={{ maxHeight: 380, overflowY: 'auto' }}>
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-10">
+                  <tr style={{ background: 'linear-gradient(to right, #0f172a, #1e1b4b)' }}>
+                    <th className="px-5 py-2.5 text-left text-xs font-semibold tracking-wider text-amber-400 whitespace-nowrap">Month</th>
+                    <th className="px-5 py-2.5 text-left text-xs font-semibold tracking-wider text-slate-300 whitespace-nowrap">Revenue</th>
+                    <th className="px-5 py-2.5 text-left text-xs font-semibold tracking-wider text-slate-300 whitespace-nowrap">MoM %</th>
+                    <th className="px-5 py-2.5 text-left text-xs font-semibold tracking-wider text-slate-300 whitespace-nowrap">Network Rank</th>
+                    <th className="px-5 py-2.5 text-left text-xs font-semibold tracking-wider text-slate-300 whitespace-nowrap">Activity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableRows.map((row, idx) => (
+                    <tr
+                      key={row.month}
+                      className={cn(
+                        'border-b border-gray-100 hover:bg-indigo-50/40 transition-colors',
+                        idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50',
+                      )}
+                    >
+                      <td className="px-5 py-2.5 text-gray-700 font-semibold whitespace-nowrap">{row.month}</td>
+                      <td className="px-5 py-2.5 text-gray-800 tabular-nums whitespace-nowrap">
+                        {row.rev > 0 ? fmtInr(row.rev, false) : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className={cn(
+                        'px-5 py-2.5 tabular-nums text-sm font-semibold whitespace-nowrap',
+                        row.mom === null ? 'text-gray-300'
+                          : row.mom >= 0 ? 'text-emerald-600' : 'text-red-500',
+                      )}>
+                        {row.mom === null ? '—' : fmtPct(row.mom)}
+                      </td>
+                      <td className="px-5 py-2.5 whitespace-nowrap">
+                        {row.rev > 0 ? (
+                          <span className="text-sm text-gray-600 tabular-nums">
+                            #{row.rank} / {row.total}
+                          </span>
+                        ) : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="px-5 py-2.5">
+                        <span className={cn(
+                          'inline-flex items-center gap-1.5 text-[11px] font-semibold whitespace-nowrap',
+                          ACTIVITY_BADGE[row.activity],
+                        )}>
+                          <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', ACTIVITY_DOT[row.activity])} />
+                          {row.activity}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="px-5 py-2 border-t border-gray-100 bg-slate-50/60 flex items-center gap-6 text-[11px] text-gray-500">
+              <span>Avg / Month: <span className="font-semibold text-gray-700">{fmtInr(avgMonthRev, false)}</span></span>
+              <span>Active months: <span className="font-semibold text-gray-700">{activeMonths} / {fm.length}</span></span>
+            </div>
+          </motion.div>
+
+        </motion.div>
+      </AnimatePresence>
 
     </div>
   )
