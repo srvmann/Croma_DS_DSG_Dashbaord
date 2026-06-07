@@ -13,6 +13,8 @@ import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
 import { allocatePhases } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
+import { fmtInr, fmtPct } from '@/lib/formatting'
+import { PT, PLOTLY_BASE } from '@/lib/plotlyTheme'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -44,17 +46,7 @@ interface StateRow {
   worstStore: { store: StoreRecord; rev: number } | null
 }
 
-// ── Light-mode Plotly theme ───────────────────────────────────────────────────
-
-const PT = { font: '#6b7280', grid: '#f3f4f6', line: '#e5e7eb' }
-const PLOTLY_BASE = {
-  paper_bgcolor: 'rgba(0,0,0,0)',
-  plot_bgcolor:  'rgba(0,0,0,0)',
-  font: { color: PT.font, family: 'Inter, sans-serif', size: 11 },
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
 
 function mAvg(store: StoreRecord, months: string[]): number {
   if (!months.length) return 0
@@ -63,19 +55,6 @@ function mAvg(store: StoreRecord, months: string[]): number {
 
 function sumRev(store: StoreRecord, months: string[]): number {
   return months.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
-}
-
-function fmtInr(n: number): string {
-  const abs  = Math.abs(n)
-  const sign = n < 0 ? '-' : ''
-  if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)}Cr`
-  if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)}L`
-  if (abs >= 1e3) return `${sign}₹${(abs / 1e3).toFixed(1)}K`
-  return `${sign}₹${abs.toFixed(0)}`
-}
-
-function fmtPct(n: number): string {
-  return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
 }
 
 function classifyJourney(

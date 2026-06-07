@@ -10,6 +10,8 @@ import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
 import { allocatePhases, type StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
+import { fmtInr, fmtPct } from '@/lib/formatting'
+import { PT } from '@/lib/plotlyTheme'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -19,12 +21,10 @@ type HealthTier     = 'Healthy' | 'Recovering' | 'Declining' | 'Dormant' | 'Unde
 type JourneyTag     = 'Surging' | 'Rising' | 'Stable' | 'Sliding' | 'Falling'
 type ActivityStatus = 'Active' | 'Growing' | 'Declining' | 'Inactive'
 
-// ── Plotly axis tokens ────────────────────────────────────────────────────────
-
-const PT = { font: '#64748b', grid: '#f1f5f9', line: '#e2e8f0' }
-
 // ── Animation helpers ─────────────────────────────────────────────────────────
 
+// Intentionally tighter than the shared panelSpring — this page uses a compact
+// card layout where a smaller y-travel and subtle scale feel more polished.
 const panelSpring = (delay = 0) => ({
   initial:    { opacity: 0, y: 22, scale: 0.98 },
   animate:    { opacity: 1, y: 0,  scale: 1    },
@@ -105,24 +105,6 @@ const ACTIVITY_DOT: Record<ActivityStatus, string> = {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function fmtInr(n: number, compact = false): string {
-  const abs  = Math.abs(n)
-  const sign = n < 0 ? '-' : ''
-  if (compact) {
-    if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)}Cr`
-    if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)}L`
-    if (abs >= 1e3) return `${sign}₹${(abs / 1e3).toFixed(1)}K`
-    return `${sign}₹${abs.toFixed(0)}`
-  }
-  if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)}Cr`
-  if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)}L`
-  return `${sign}₹${abs.toLocaleString('en-IN')}`
-}
-
-function fmtPct(n: number): string {
-  return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
-}
 
 function revForMonths(store: StoreRecord, ms: string[]): number {
   return ms.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
@@ -521,7 +503,7 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
       return { month: m, rev, change: i === 0 ? rev : rev - prev, isFirst: i === 0 }
     })
 
-    const selectorLabel = `${selectedStore.store_id} · ${fmtInr(totalRev, true)} · ${tag}`
+    const selectorLabel = `${selectedStore.store_id} · ${fmtInr(totalRev)} · ${tag}`
 
     return {
       revByMonth, rolling, maxIdx, minIdx, hs, t, growthVal, tag,
@@ -583,7 +565,7 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
                       <div className="text-xs font-bold text-gray-800 truncate">{s.store_name ?? s.store_id}</div>
                       <div className="text-[10px] text-gray-400 font-mono mt-0.5">{s.store_id}</div>
                     </div>
-                    <div className="text-sm font-bold text-indigo-600">{fmtInr(rev, true)}</div>
+                    <div className="text-sm font-bold text-indigo-600">{fmtInr(rev)}</div>
                   </motion.button>
                 )
               })}
@@ -629,7 +611,7 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
   if (fm.length > 0) {
     annotations.push({
       x: fm[maxIdx], y: revByMonth[maxIdx],
-      text: `Peak: ${fmtInr(revByMonth[maxIdx], true)}`,
+      text: `Peak: ${fmtInr(revByMonth[maxIdx])}`,
       showarrow: true, arrowhead: 2, arrowsize: 0.8, arrowcolor: '#10b981',
       font: { color: '#10b981', size: 10 },
       bgcolor: 'rgba(16,185,129,0.08)', bordercolor: '#10b981', borderwidth: 1, borderpad: 3,
@@ -638,7 +620,7 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
     if (maxIdx !== minIdx && revByMonth[minIdx] > 0) {
       annotations.push({
         x: fm[minIdx], y: revByMonth[minIdx],
-        text: `Low: ${fmtInr(revByMonth[minIdx], true)}`,
+        text: `Low: ${fmtInr(revByMonth[minIdx])}`,
         showarrow: true, arrowhead: 2, arrowsize: 0.8, arrowcolor: '#ef4444',
         font: { color: '#ef4444', size: 10 },
         bgcolor: 'rgba(239,68,68,0.08)', bordercolor: '#ef4444', borderwidth: 1, borderpad: 3,
@@ -736,7 +718,7 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
                   {/* Total Revenue */}
                   <div className="flex flex-col px-4 py-3 rounded-xl bg-white/10 border border-white/10 min-w-[90px]">
                     <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-white/40 whitespace-nowrap">Total Revenue</span>
-                    <span className="text-[17px] font-bold text-white mt-1 tabular-nums leading-none">{fmtInr(totalRev, true)}</span>
+                    <span className="text-[17px] font-bold text-white mt-1 tabular-nums leading-none">{fmtInr(totalRev)}</span>
                   </div>
                   {/* Network Rank */}
                   <div className="flex flex-col px-4 py-3 rounded-xl bg-white/10 border border-white/10 min-w-[90px]">
@@ -1031,7 +1013,7 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
                     >
                       <td className="px-5 py-2.5 text-gray-700 font-semibold whitespace-nowrap">{row.month}</td>
                       <td className="px-5 py-2.5 text-gray-800 tabular-nums whitespace-nowrap">
-                        {row.rev > 0 ? fmtInr(row.rev, false) : <span className="text-gray-300">—</span>}
+                        {row.rev > 0 ? fmtInr(row.rev) : <span className="text-gray-300">—</span>}
                       </td>
                       <td className={cn(
                         'px-5 py-2.5 tabular-nums text-sm font-semibold whitespace-nowrap',
@@ -1062,7 +1044,7 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
               </table>
             </div>
             <div className="px-5 py-2 border-t border-gray-100 bg-slate-50/60 flex items-center gap-6 text-[11px] text-gray-500">
-              <span>Avg / Month: <span className="font-semibold text-gray-700">{fmtInr(avgMonthRev, false)}</span></span>
+              <span>Avg / Month: <span className="font-semibold text-gray-700">{fmtInr(avgMonthRev)}</span></span>
               <span>Active months: <span className="font-semibold text-gray-700">{activeMonths} / {fm.length}</span></span>
             </div>
           </motion.div>

@@ -7,11 +7,11 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import { cn } from '@/lib/utils'
 import { allocatePhases } from '@/lib/classificationEngine'
+import { fmtInr, fmtPct } from '@/lib/formatting'
+import { panelSpring } from '@/lib/animations'
+import { PT, PT_AXIS } from '@/lib/plotlyTheme'
 
 const Plot = createPlotlyComponent(Plotly)
-
-// ── Light-mode Plotly theme (mirrors ExecutiveOverview) ───────────────────────
-const PT = { font: '#6b7280', grid: '#e5e7eb', line: '#d1d5db' }
 
 // ── Box-plot colour palette ───────────────────────────────────────────────────
 const STATE_PALETTE = [
@@ -19,28 +19,6 @@ const STATE_PALETTE = [
   '#06b6d4', '#f97316', '#84cc16', '#ec4899',
   '#14b8a6', '#a855f7', '#f43f5e', '#22d3ee',
 ]
-
-// ── Animation variants (identical to ExecutiveOverview) ───────────────────────
-const panelSpring = (delay = 0) => ({
-  initial:    { opacity: 0, y: 28 },
-  animate:    { opacity: 1, y: 0 },
-  transition: { type: 'spring' as const, stiffness: 260, damping: 24, delay },
-})
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function fmtInr(n: number): string {
-  const abs  = Math.abs(n)
-  const sign = n < 0 ? '-' : ''
-  if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)}Cr`
-  if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)}L`
-  if (abs >= 1e3) return `${sign}₹${(abs / 1e3).toFixed(1)}K`
-  return `${sign}₹${abs.toFixed(0)}`
-}
-
-function fmtPct(n: number): string {
-  return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
-}
 
 // Phase colours — used consistently on bars and insight cards
 const PHASE_COLOR = {
@@ -174,8 +152,7 @@ export default function MonthlyRevenue({ filters }: Props) {
     })),
   [fs, fm])
 
-  // ── Shared light-mode Plotly axes ──────────────────────────────────────────
-  const ptAxis = { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true }
+  // PT_AXIS is imported from @/lib/plotlyTheme — shared axis style
 
   // ── Empty state ────────────────────────────────────────────────────────────
   if (fs.length === 0 || fm.length === 0) {
@@ -233,10 +210,10 @@ export default function MonthlyRevenue({ filters }: Props) {
               orientation: 'h' as const,
               y: -0.22,
             },
-            xaxis:  { ...ptAxis },
-            yaxis:  { ...ptAxis, title: { text: 'Revenue (₹)' }, tickformat: ',.2s' },
+            xaxis:  { ...PT_AXIS },
+            yaxis:  { ...PT_AXIS, title: { text: 'Revenue (₹)' }, tickformat: ',.2s' },
             yaxis2: {
-              ...ptAxis,
+              ...PT_AXIS,
               title: { text: 'Active Stores' },
               overlaying: 'y' as const,
               side: 'right' as const,
@@ -314,8 +291,8 @@ export default function MonthlyRevenue({ filters }: Props) {
             plot_bgcolor:  'rgba(0,0,0,0)',
             font:       { color: PT.font, family: 'Inter, sans-serif', size: 11 },
             showlegend: false,
-            xaxis:  { ...ptAxis },
-            yaxis:  { ...ptAxis, title: { text: 'Revenue (₹)' }, tickformat: ',.0f' },
+            xaxis:  { ...PT_AXIS },
+            yaxis:  { ...PT_AXIS, title: { text: 'Revenue (₹)' }, tickformat: ',.0f' },
             margin: { l: 70, r: 16, t: 8, b: 60 },
             height: 300,
           }}

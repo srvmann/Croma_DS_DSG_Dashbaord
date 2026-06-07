@@ -8,6 +8,8 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreMetrics, StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
+import { fmtInr, fmtPct } from '@/lib/formatting'
+import { CATEGORY_TEXT_COLOR } from '@/lib/categoryStyles'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -16,32 +18,7 @@ const Plot = createPlotlyComponent(Plotly)
 type SortKey = 'growth' | 'earlyRev' | 'recentRev' | 'earlyRank' | 'recentRank' | 'health' | 'state'
 type SortDir = 'asc' | 'desc'
 
-// Categories shown on this tab (positive trajectory)
-const POSITIVE_CATEGORIES: StoreCategory[] = ['New Bloomer', 'Rising Star', 'Growing Store']
-
-const CATEGORY_STYLE: Record<StoreCategory, string> = {
-  'New Bloomer':          'text-emerald-600',
-  'Rising Star':          'text-yellow-500',
-  'Growing Store':        'text-blue-500',
-  'Consistent Performer': 'text-violet-500',
-  'Declining Store':      'text-orange-500',
-  'Fallen Star':          'text-red-600',
-  'Low Volume Store':     'text-gray-400',
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function fmtInr(n: number) {
-  const abs  = Math.abs(n)
-  const sign = n < 0 ? '-' : ''
-  if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)}Cr`
-  if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)}L`
-  if (abs >= 1e3) return `${sign}₹${(abs / 1e3).toFixed(1)}K`
-  return `${sign}₹${abs.toFixed(0)}`
-}
-function fmtPct(n: number) {
-  return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
-}
+const POSITIVE_CATEGORIES: StoreCategory[] = ['Rising Star']
 
 // ── Table columns ─────────────────────────────────────────────────────────────
 
@@ -203,7 +180,7 @@ export default function RisingStars({
           Stores Gaining Momentum
         </h2>
         <p className="text-sm text-gray-500 mt-1">
-          {rows.length} stores gaining ground — classified as New Bloomer, Rising Star, or Growing Store.
+          {rows.length} Rising Star stores — stores that have shown strong upward momentum.
           These are the network's bright spots worth nurturing.
         </p>
       </div>
@@ -334,7 +311,7 @@ export default function RisingStars({
                   <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">
                     {row.store.state ?? '—'}
                   </td>
-                  <td className={cn('px-4 py-2.5 text-[11px] font-semibold', CATEGORY_STYLE[row.category])}>
+                  <td className={cn('px-4 py-2.5 text-[11px] font-semibold', CATEGORY_TEXT_COLOR[row.category])}>
                     {row.category}
                   </td>
                   <td className="px-4 py-2.5 text-right text-gray-400 tabular-nums">

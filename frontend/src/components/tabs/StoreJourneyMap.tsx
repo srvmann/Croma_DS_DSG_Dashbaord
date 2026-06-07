@@ -19,6 +19,9 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import { type StoreCategory, CATEGORY_ORDER } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
+import { fmtInr, fmtPct } from '@/lib/formatting'
+import { kpiContainer, kpiItem, panelSpring } from '@/lib/animations'
+import { PT } from '@/lib/plotlyTheme'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -66,24 +69,6 @@ const CATEGORY_ICON: Record<StoreCategory, React.ReactNode> = {
   'Low Volume Store':     <Zap        className="h-4 w-4" />,
 }
 
-const PT = { font: '#6b7280', grid: '#e5e7eb', line: '#d1d5db' }
-
-// ── Animation variants ────────────────────────────────────────────────────────
-
-const kpiContainer = {
-  hidden: {},
-  show:   { transition: { staggerChildren: 0.07, delayChildren: 0.05 } },
-}
-const kpiItem = {
-  hidden: { opacity: 0, y: 20, scale: 0.93 },
-  show:   { opacity: 1, y: 0, scale: 1, transition: { type: 'spring' as const, stiffness: 300, damping: 24 } },
-}
-const panelSpring = (delay = 0) => ({
-  initial:    { opacity: 0, y: 28 },
-  animate:    { opacity: 1, y: 0 },
-  transition: { type: 'spring' as const, stiffness: 260, damping: 24, delay },
-})
-
 // ── AnimatedNumber ────────────────────────────────────────────────────────────
 
 function AnimatedNumber({ value, className }: { value: number; className?: string }) {
@@ -110,21 +95,6 @@ function MiniBar({ ratio, color }: { ratio: number; color: string }) {
       />
     </div>
   )
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function fmtInr(n: number): string {
-  const abs  = Math.abs(n)
-  const sign = n < 0 ? '-' : ''
-  if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)}Cr`
-  if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)}L`
-  if (abs >= 1e3) return `${sign}₹${(abs / 1e3).toFixed(1)}K`
-  return `${sign}₹${abs.toFixed(0)}`
-}
-
-function fmtPct(n: number): string {
-  return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────

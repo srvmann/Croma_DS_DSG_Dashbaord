@@ -14,6 +14,8 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import { cn } from '@/lib/utils'
 import TargetManagementDrawer from './TargetManagementDrawer'
+import { fmtInr, fmtPct } from '@/lib/formatting'
+import { kpiContainer, kpiItem, panelSpring } from '@/lib/animations'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -47,41 +49,7 @@ const RISK_CFG: Record<RiskStatus, { color: string; badge: string; zone: string 
   'At Risk':   { color: '#ef4444', badge: 'bg-red-100 text-red-700',         zone: 'rgba(239,68,68,0.05)'  },
 }
 
-// ── Animation helpers ─────────────────────────────────────────────────────────
-
-const kpiContainer = {
-  hidden: {},
-  show: { transition: { staggerChildren: 0.07, delayChildren: 0.05 } },
-}
-
-const kpiItem = {
-  hidden: { opacity: 0, y: 20, scale: 0.93 },
-  show: {
-    opacity: 1, y: 0, scale: 1,
-    transition: { type: 'spring' as const, stiffness: 300, damping: 24 },
-  },
-}
-
-const panelSpring = (delay = 0) => ({
-  initial:    { opacity: 0, y: 28 },
-  animate:    { opacity: 1, y: 0 },
-  transition: { type: 'spring' as const, stiffness: 260, damping: 24, delay },
-})
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function fmtInr(n: number): string {
-  const abs = Math.abs(n)
-  const sign = n < 0 ? '-' : ''
-  if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)}Cr`
-  if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)}L`
-  if (abs >= 1e3) return `${sign}₹${(abs / 1e3).toFixed(1)}K`
-  return `${sign}₹${abs.toFixed(0)}`
-}
-
-function fmtPct(n: number, d = 1): string {
-  return `${n >= 0 ? '+' : ''}${n.toFixed(d)}%`
-}
 
 function getRisk(projAchPct: number): RiskStatus {
   if (projAchPct >= 110) return 'Champion'

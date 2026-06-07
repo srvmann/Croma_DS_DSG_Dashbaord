@@ -14,6 +14,9 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { fmtInr, fmtPct } from '@/lib/formatting'
+import { kpiContainer, kpiItem, panelSpring } from '@/lib/animations'
+import { PT } from '@/lib/plotlyTheme'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -47,29 +50,8 @@ const SANKEY_LINK_COLORS = [
   'rgba(148,163,184,0.20)',
 ]
 
-// Fixed light-mode Plotly theme tokens
-const PT = { font: '#6b7280', grid: '#e5e7eb', line: '#d1d5db', nodeBorder: '#e5e7eb' }
-
-// ── Animation variants ────────────────────────────────────────────────────────
-
-const kpiContainer = {
-  hidden: {},
-  show:   { transition: { staggerChildren: 0.07, delayChildren: 0.05 } },
-}
-
-const kpiItem = {
-  hidden: { opacity: 0, y: 20, scale: 0.93 },
-  show:   {
-    opacity: 1, y: 0, scale: 1,
-    transition: { type: 'spring' as const, stiffness: 300, damping: 24 },
-  },
-}
-
-const panelSpring = (delay = 0) => ({
-  initial:    { opacity: 0, y: 28 },
-  animate:    { opacity: 1, y: 0 },
-  transition: { type: 'spring' as const, stiffness: 260, damping: 24, delay },
-})
+// nodeBorder re-uses the shared line token
+const nodeBorder = PT.line
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -86,19 +68,6 @@ function halve(months: string[]): { early: string[]; recent: string[] } {
 
 function winRev(store: StoreRecord, months: string[]): number {
   return months.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
-}
-
-function fmtInr(n: number): string {
-  const abs  = Math.abs(n)
-  const sign = n < 0 ? '-' : ''
-  if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)}Cr`
-  if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)}L`
-  if (abs >= 1e3) return `${sign}₹${(abs / 1e3).toFixed(1)}K`
-  return `${sign}₹${abs.toFixed(0)}`
-}
-
-function fmtPct(n: number): string {
-  return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
 }
 
 function pctileOf(rev: number, sorted: number[]): number {
@@ -234,7 +203,7 @@ function KPICard({ label, value, sub, icon, barRatio, barColor, danger }: KPICar
 interface Props { filters: FilterState }
 
 export default function ExecutiveOverview({ filters }: Props) {
-  const { stores, months } = useDataContext()
+  const { stores, months, classification } = useDataContext()
 
   // ── Filter + split ─────────────────────────────────────────────────────────
   const { fs, fm, early, recent } = useMemo(() => {
@@ -274,11 +243,17 @@ export default function ExecutiveOverview({ filters }: Props) {
     const scope    = journeys.length
     const improved = journeys.filter(j => j.rPct > j.ePct).length
     const declined = journeys.filter(j => j.rPct <= j.ePct).length
-    const rising   = journeys.filter(j => j.recentCategory === 'Rising Star').length
-    const fallen   = journeys.filter(j => j.recentCategory === 'Fallen Star').length
     const dormant  = journeys.filter(j => j.rRev === 0).length
+
+    // Use the central classification engine so counts match the detail pages
+    let engineScope = classification.metrics
+    if (filters.state)    engineScope = engineScope.filter(m => m.store.state    === filters.state)
+    if (filters.category) engineScope = engineScope.filter(m => m.store.category === filters.category)
+    const rising = engineScope.filter(m => m.category === 'Rising Star').length
+    const fallen = engineScope.filter(m => m.category === 'Fallen Star').length
+
     return { scope, improved, declined, rising, fallen, dormant }
-  }, [journeys])
+  }, [journeys, classification, filters])
 
   // ── Sankey ─────────────────────────────────────────────────────────────────
   const sankeyTrace = useMemo(() => {
@@ -421,7 +396,7 @@ export default function ExecutiveOverview({ filters }: Props) {
                 node: {
                   pad: 20,
                   thickness: 24,
-                  line: { color: PT.nodeBorder, width: 0.5 },
+                  line: { color: nodeBorder, width: 0.5 },
                   label: sankeyTrace.labels,
                   color: sankeyTrace.colors,
                 },

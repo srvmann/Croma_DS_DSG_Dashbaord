@@ -7,6 +7,9 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
 import { allocatePhases } from '@/lib/classificationEngine'
+import { fmtInr, fmtPct } from '@/lib/formatting'
+import { panelSpring as makePanelSpring } from '@/lib/animations'
+import { PT } from '@/lib/plotlyTheme'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -74,32 +77,17 @@ const LEGEND_CATS = [
   { label: 'Critical',      color: '#991b1b' },
 ]
 
-// ── Animation ─────────────────────────────────────────────────────────────────
-const panelSpring = {
-  initial:    { opacity: 0, y: 24 },
-  animate:    { opacity: 1, y: 0 },
-  transition: { type: 'spring' as const, stiffness: 260, damping: 24 },
-}
+// Static panel spring for this page (no staggered delay needed)
+const panelSpring = makePanelSpring()
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
 function winRev(store: StoreRecord, months: string[]): number {
   return months.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
 }
 
 function mAvg(store: StoreRecord, months: string[]): number {
   return months.length ? winRev(store, months) / months.length : 0
-}
-
-function fmtInr(n: number): string {
-  const abs = Math.abs(n); const sign = n < 0 ? '-' : ''
-  if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)}Cr`
-  if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)}L`
-  if (abs >= 1e3) return `${sign}₹${(abs / 1e3).toFixed(1)}K`
-  return `${sign}₹${abs.toFixed(0)}`
-}
-
-function fmtPct(n: number): string {
-  return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
 }
 
 function matchGeoName(ourName: string, geoNames: string[]): string | null {

@@ -7,6 +7,8 @@ import createPlotlyComponent from 'react-plotly.js/factory'
 import Plotly from 'plotly.js-dist-min'
 import axios from 'axios'
 import { cn } from '@/lib/utils'
+import { fmtInr } from '@/lib/formatting'
+import { PT, PLOTLY_BASE, PT_AXIS } from '@/lib/plotlyTheme'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -17,17 +19,6 @@ interface StoreDetail {
   category?: string
   monthly_sales: Record<string, number>
   target?: number | null
-}
-
-const PT = { font: '#6b7280', grid: '#e5e7eb', line: '#d1d5db' }
-
-function fmtInr(n: number): string {
-  const abs  = Math.abs(n)
-  const sign = n < 0 ? '-' : ''
-  if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)}Cr`
-  if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)}L`
-  if (abs >= 1e3) return `${sign}₹${(abs / 1e3).toFixed(1)}K`
-  return `${sign}₹${abs.toFixed(0)}`
 }
 
 function InfoChip({ label, value }: { label: string; value: string }) {
@@ -180,18 +171,13 @@ export default function StoreDeepDivePage() {
                 : []),
             ]}
             layout={{
-              paper_bgcolor: 'rgba(0,0,0,0)',
-              plot_bgcolor:  'rgba(0,0,0,0)',
-              font:   { color: PT.font, family: 'Inter, sans-serif', size: 11 },
+              ...PLOTLY_BASE,
               legend: {
                 bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, size: 10 },
                 orientation: 'h' as const, x: 0, y: -0.22,
               },
-              xaxis: { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true },
-              yaxis: {
-                gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line,
-                automargin: true, tickformat: ',.0s',
-              },
+              xaxis: { ...PT_AXIS },
+              yaxis: { ...PT_AXIS, tickformat: ',.0s' },
               hovermode: 'x unified' as const,
               margin: { l: 52, r: 12, t: 12, b: 80 },
               height: 340,

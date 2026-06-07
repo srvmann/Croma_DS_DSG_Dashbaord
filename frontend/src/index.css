@@ -48,11 +48,11 @@
 .skeleton-pulse {
   background: linear-gradient(
     90deg,
-    #1f2937 0%,
-    #2d3f55 40%,
-    #374151 50%,
-    #2d3f55 60%,
-    #1f2937 100%
+    #e5e7eb 0%,
+    #f3f4f6 40%,
+    #e5e7eb 50%,
+    #f3f4f6 60%,
+    #e5e7eb 100%
   );
   background-size: 1200px 100%;
   animation: skeleton-shimmer 1.6s ease-in-out infinite;

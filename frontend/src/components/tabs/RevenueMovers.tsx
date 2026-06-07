@@ -9,6 +9,7 @@ import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
 import { allocatePhases } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
+import { fmtInr, fmtPct } from '@/lib/formatting'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -27,17 +28,6 @@ interface MoverRow {
 
 function phaseAvg(store: StoreRecord, ms: string[]) {
   return ms.length ? ms.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0) / ms.length : 0
-}
-function fmtInr(n: number) {
-  const abs = Math.abs(n)
-  const sign = n < 0 ? '-' : ''
-  if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)}Cr`
-  if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)}L`
-  if (abs >= 1e3) return `${sign}₹${(abs / 1e3).toFixed(1)}K`
-  return `${sign}₹${abs.toFixed(0)}`
-}
-function fmtPct(n: number) {
-  return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
 }
 function abbr(m: string) {
   // "Jan-2024" → "Jan'24"
