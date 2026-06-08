@@ -11,7 +11,7 @@ import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
-import { allocatePhases } from '@/lib/classificationEngine'
+import { allocatePhases, type StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
 import { fmtInr, fmtPct } from '@/lib/formatting'
 import { PT, PLOTLY_BASE } from '@/lib/plotlyTheme'
@@ -20,7 +20,6 @@ const Plot = createPlotlyComponent(Plotly)
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Journey = 'Rising Star' | 'Fallen Star' | 'Consistent Performer' | 'Consistently Low' | 'Average'
 type SortKey = 'state' | 'stores' | 'active' | 'growth' | 'revenue' | 'health' | 'risk' | 'opp'
 
 interface StateRow {
@@ -34,11 +33,13 @@ interface StateRow {
   growthPct:  number | null
   avgStore:   number
   netPct:     number | null
-  rising:     number
-  fallen:     number
-  consistent: number
-  low:        number
-  average:    number
+  newBloomer:    number
+  rising:        number
+  growing:       number
+  constant:      number
+  declining:     number
+  fallen:        number
+  inactiveStore: number
   health:     number
   risk:       number
   opp:        number
@@ -48,40 +49,8 @@ interface StateRow {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function mAvg(store: StoreRecord, months: string[]): number {
-  if (!months.length) return 0
-  return months.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0) / months.length
-}
-
 function sumRev(store: StoreRecord, months: string[]): number {
   return months.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
-}
-
-function classifyJourney(
-  store: StoreRecord,
-  fm: string[],
-  early: string[],
-  recent: string[],
-  medianWindowRev: number,
-): Journey {
-  const earlyAvg  = mAvg(store, early)
-  const recentAvg = mAvg(store, recent)
-
-  if (early.length > 0 && recent.length > 0 && earlyAvg > 0) {
-    const ratio = recentAvg / earlyAvg
-    if (ratio > 1.15) return 'Rising Star'
-    if (ratio < 0.85) return 'Fallen Star'
-  }
-
-  const revs = fm.map(m => store.monthly_sales[m] ?? 0)
-  const mean = revs.reduce((s, r) => s + r, 0) / (revs.length || 1)
-  if (mean === 0) return 'Consistently Low'
-
-  const coV = Math.sqrt(revs.reduce((s, r) => s + (r - mean) ** 2, 0) / revs.length) / mean
-  if (coV < 0.10) {
-    return sumRev(store, fm) > medianWindowRev ? 'Consistent Performer' : 'Consistently Low'
-  }
-  return 'Average'
 }
 
 // ── NetworkFunnel ─────────────────────────────────────────────────────────────
@@ -100,7 +69,7 @@ const POSITIVE_STEPS = [
   {
     label: 'Growing Stores',
     color: '#059669',
-    desc:  'Rising Stars + Consistent Performers — on a positive trajectory',
+    desc:  'Rising Stars + Growing Stores — on a clear upward trajectory',
   },
   {
     label: 'Rising Stars',
@@ -268,16 +237,13 @@ function RiskBadge({ value }: { value: number }) {
 interface Props { filters: FilterState }
 
 export default function StateJourneyAnalysis({ filters }: Props) {
-  const { stores, months } = useDataContext()
+  const { stores, months, classification } = useDataContext()
   const [sortKey, setSortKey] = useState<SortKey>('revenue')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [compState, setCompState] = useState<string | null>(null)
 
-  // ── Filter + split (state filter intentionally ignored) ────────────────────
-  const { fs, fm, early, mid, recent } = useMemo(() => {
-    let fs = stores
-    if (filters.category) fs = fs.filter(s => s.category === filters.category)
-
+  // ── Month range for revenue recomputation (state filter intentionally ignored) ─
+  const { fm, early, mid, recent } = useMemo(() => {
     let fm = months
     if (filters.fromMonth) {
       const i = months.indexOf(filters.fromMonth)
@@ -287,42 +253,40 @@ export default function StateJourneyAnalysis({ filters }: Props) {
       const i = months.indexOf(filters.toMonth)
       if (i >= 0) fm = fm.slice(0, i + 1)
     }
-
     const { earlyMonths: early, midMonths: mid, recentMonths: recent } = allocatePhases(fm)
-    return { fs, fm, early, mid, recent }
-  }, [stores, months, filters])
+    return { fm, early, mid, recent }
+  }, [months, filters.fromMonth, filters.toMonth])
 
-  // ── Per-store classification ───────────────────────────────────────────────
+  // ── Per-store data using central engine classifications ────────────────────
+  // Category comes from the single classification engine; revenue metrics use
+  // the selected month range so charts respect the time filter.
   const classifiedStores = useMemo(() => {
-    const allRevs   = fs.map(s => sumRev(s, fm)).sort((a, b) => a - b)
-    const medianRev = allRevs.length ? allRevs[Math.floor(allRevs.length / 2)] : 0
+    let scope = classification.metrics
+    if (filters.category) scope = scope.filter(m => m.store.category === filters.category)
 
-    return fs.map(store => {
-      const earlyAvg      = mAvg(store, early)
-      const recentAvg     = mAvg(store, recent)
-      const rev           = sumRev(store, fm)
-      const earlyR        = sumRev(store, early)
-      const recentR       = sumRev(store, recent)
-      const growthPct     = early.length && recent.length && earlyAvg > 0
-        ? (recentAvg - earlyAvg) / earlyAvg * 100
-        : null
+    return scope.map(m => {
+      const store      = m.store
+      const earlyR     = sumRev(store, early)
+      const recentR    = sumRev(store, recent)
+      const rev        = sumRev(store, fm)
+      const growthPct  = earlyR > 0 ? (recentR - earlyR) / earlyR * 100 : null
       const isRecentActive = recent.length
-        ? recent.some(m => (store.monthly_sales[m] ?? 0) > 0)
-        : fm.some(m => (store.monthly_sales[m] ?? 0) > 0)
-      const journey        = classifyJourney(store, fm, early, recent, medianRev)
-      return { store, rev, earlyR, recentR, growthPct, isRecentActive, journey }
+        ? recent.some(mo => (store.monthly_sales[mo] ?? 0) > 0)
+        : fm.some(mo => (store.monthly_sales[mo] ?? 0) > 0)
+      // category is the master classification — never recomputed here
+      return { store, rev, earlyR, recentR, growthPct, isRecentActive, category: m.category as StoreCategory }
     })
-  }, [fs, fm, early, recent])
+  }, [classification.metrics, filters.category, fm, early, recent])
 
-  // ── Funnel counts ─────────────────────────────────────────────────────────
+  // ── Funnel counts (using central engine categories) ────────────────────────
   const funnel = useMemo(() => ({
     all:     classifiedStores.length,
     active:  classifiedStores.filter(c => c.isRecentActive).length,
     growing: classifiedStores.filter(c =>
-      c.journey === 'Rising Star' || c.journey === 'Consistent Performer'
+      c.category === 'Rising Star' || c.category === 'Growing Store'
     ).length,
-    rising: classifiedStores.filter(c => c.journey === 'Rising Star').length,
-    fallen: classifiedStores.filter(c => c.journey === 'Fallen Star').length,
+    rising: classifiedStores.filter(c => c.category === 'Rising Star').length,
+    fallen: classifiedStores.filter(c => c.category === 'Fallen Star').length,
   }), [classifiedStores])
 
   // ── Per-state aggregations ─────────────────────────────────────────────────
@@ -349,11 +313,13 @@ export default function StateJourneyAnalysis({ filters }: Props) {
       const netPct    = totalPortfolioRev > 0 ? totalRevV / totalPortfolioRev * 100 : null
       const avgStore  = total > 0 ? totalRevV / total : 0
 
-      const rising     = data.filter(d => d.journey === 'Rising Star').length
-      const fallen     = data.filter(d => d.journey === 'Fallen Star').length
-      const consistent = data.filter(d => d.journey === 'Consistent Performer').length
-      const low        = data.filter(d => d.journey === 'Consistently Low').length
-      const average    = data.filter(d => d.journey === 'Average').length
+      const newBloomer    = data.filter(d => d.category === 'New Bloomer').length
+      const rising        = data.filter(d => d.category === 'Rising Star').length
+      const growing       = data.filter(d => d.category === 'Growing Store').length
+      const constant      = data.filter(d => d.category === 'Constant Store').length
+      const declining     = data.filter(d => d.category === 'Declining Store').length
+      const fallen        = data.filter(d => d.category === 'Fallen Star').length
+      const inactiveStore = data.filter(d => d.category === 'Inactive Store').length
 
       // Health (0–100): weighted composite of active ratio, growth momentum, rising share
       const activeRatio  = total > 0 ? active / total : 0
@@ -382,7 +348,7 @@ export default function StateJourneyAnalysis({ filters }: Props) {
         state, total, active, inactive,
         earlyRev, recentRev, totalRevV,
         growthPct, avgStore, netPct,
-        rising, fallen, consistent, low, average,
+        newBloomer, rising, growing, constant, declining, fallen, inactiveStore,
         health, risk, opp,
         topStore, worstStore,
       })
@@ -484,7 +450,7 @@ export default function StateJourneyAnalysis({ filters }: Props) {
     labels:  stateMetrics.map(m => m.state),
     parents: stateMetrics.map(() => ''),
     values:  stateMetrics.map(m => m.total),
-    customdata: stateMetrics.map(m => [m.active, m.total, m.health.toFixed(1), m.rising, m.fallen]),
+    customdata: stateMetrics.map(m => [m.active, m.total, m.health.toFixed(1), m.rising + m.growing, m.fallen]),
     marker: {
       colorscale: [
         [0,    '#991b1b'],
@@ -899,10 +865,13 @@ export default function StateJourneyAnalysis({ filters }: Props) {
 
                 <th className="px-3 py-2.5 text-right font-semibold uppercase tracking-wider text-gray-500">Net%</th>
 
+                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-emerald-600">New</th>
                 <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-amber-600">Rising</th>
+                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-blue-500">Growing</th>
+                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-violet-500">Stable</th>
+                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-orange-500">Decline</th>
                 <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-red-500">Fallen</th>
-                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-emerald-600">Consist.</th>
-                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-gray-400">Low</th>
+                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-gray-400">Inactive</th>
 
                 <th className="px-3 py-2.5 text-right">
                   <button onClick={() => toggleSort('health')} className="flex items-center gap-1 font-semibold uppercase tracking-wider text-gray-500 hover:text-gray-800 transition-colors ml-auto">
@@ -959,17 +928,24 @@ export default function StateJourneyAnalysis({ filters }: Props) {
                   </td>
 
                   <td className="px-3 py-2.5 text-center">
+                    {row.newBloomer > 0
+                      ? <span className="inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-emerald-100 text-emerald-700 font-bold px-1.5">{row.newBloomer}</span>
+                      : <span className="text-gray-300">0</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-center">
                     {row.rising > 0
                       ? <span className="inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-amber-100 text-amber-700 font-bold px-1.5">{row.rising}</span>
                       : <span className="text-gray-300">0</span>}
                   </td>
+                  <td className="px-3 py-2.5 text-center text-blue-500 tabular-nums">{row.growing}</td>
+                  <td className="px-3 py-2.5 text-center text-violet-500 tabular-nums">{row.constant}</td>
+                  <td className="px-3 py-2.5 text-center text-orange-500 tabular-nums">{row.declining}</td>
                   <td className="px-3 py-2.5 text-center">
                     {row.fallen > 0
                       ? <span className="inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-red-100 text-red-600 font-bold px-1.5">{row.fallen}</span>
                       : <span className="text-gray-300">0</span>}
                   </td>
-                  <td className="px-3 py-2.5 text-center text-emerald-600 tabular-nums">{row.consistent}</td>
-                  <td className="px-3 py-2.5 text-center text-gray-400 tabular-nums">{row.low}</td>
+                  <td className="px-3 py-2.5 text-center text-gray-400 tabular-nums">{row.inactiveStore > 0 ? row.inactiveStore : <span className="text-gray-200">0</span>}</td>
 
                   <td className="px-3 py-2.5 text-right"><HealthBadge value={row.health} /></td>
                   <td className="px-3 py-2.5 text-right"><RiskBadge value={row.risk} /></td>

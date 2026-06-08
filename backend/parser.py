@@ -225,6 +225,13 @@ def _parse_transactional(df: pd.DataFrame) -> list[dict[str, Any]]:
         .reset_index()
     )
 
+    # Count transactions (plan count) by (store, month, sub_classification)
+    grp_cnt = (
+        df.groupby([c_store, c_month, c_sub], observed=True)
+        .size()
+        .reset_index(name="_cnt")
+    )
+
     # Build per-store dicts
     store_data: dict[str, dict] = {}
     for _, row in grp.iterrows():
@@ -234,7 +241,7 @@ def _parse_transactional(df: pd.DataFrame) -> list[dict[str, Any]]:
         amt   = float(row[c_amt])
 
         if sid not in store_data:
-            store_data[sid] = {"ds": {}, "dsg": {}}
+            store_data[sid] = {"ds": {}, "dsg": {}, "plans": {}}
 
         if sub == DS_LABEL:
             store_data[sid]["ds"][month]  = store_data[sid]["ds"].get(month, 0) + amt
@@ -244,6 +251,15 @@ def _parse_transactional(df: pd.DataFrame) -> list[dict[str, Any]]:
             # Unknown sub-classification — count in DS bucket
             store_data[sid]["ds"][month]  = store_data[sid]["ds"].get(month, 0) + amt
 
+    # Accumulate plan counts per store per month (all sub-classifications combined)
+    for _, row in grp_cnt.iterrows():
+        sid   = str(row[c_store])
+        month = str(row[c_month])
+        cnt   = int(row["_cnt"])
+        if sid not in store_data:
+            store_data[sid] = {"ds": {}, "dsg": {}, "plans": {}}
+        store_data[sid]["plans"][month] = store_data[sid]["plans"].get(month, 0) + cnt
+
     # Gather all months so every store has the same keys
     all_months = _sort_months_list(
         list({m for d in store_data.values() for m in list(d["ds"]) + list(d["dsg"])})
@@ -251,19 +267,21 @@ def _parse_transactional(df: pd.DataFrame) -> list[dict[str, Any]]:
 
     records: list[dict[str, Any]] = []
     for sid, buckets in store_data.items():
-        ds_monthly  = {m: buckets["ds"].get(m, 0.0)  for m in all_months}
-        dsg_monthly = {m: buckets["dsg"].get(m, 0.0) for m in all_months}
+        ds_monthly    = {m: buckets["ds"].get(m, 0.0)  for m in all_months}
+        dsg_monthly   = {m: buckets["dsg"].get(m, 0.0) for m in all_months}
         total_monthly = {m: ds_monthly[m] + dsg_monthly[m] for m in all_months}
+        plans_monthly = {m: buckets.get("plans", {}).get(m, 0) for m in all_months}
 
         records.append({
-            "store_id":         sid,
-            "store_name":       "",  # filled from targets file if available
-            "state":            meta.get(sid, {}).get("state", ""),
-            "category":         meta.get(sid, {}).get("category", ""),
-            "monthly_sales":    total_monthly,
-            "monthly_sales_ds": ds_monthly,
-            "monthly_sales_dsg": dsg_monthly,
-            "total_sales":      round(sum(total_monthly.values()), 2),
+            "store_id":              sid,
+            "store_name":            "",  # filled from targets file if available
+            "state":                 meta.get(sid, {}).get("state", ""),
+            "category":              meta.get(sid, {}).get("category", ""),
+            "monthly_sales":         total_monthly,
+            "monthly_sales_ds":      ds_monthly,
+            "monthly_sales_dsg":     dsg_monthly,
+            "monthly_plans_count":   plans_monthly,
+            "total_sales":           round(sum(total_monthly.values()), 2),
         })
 
     return records

@@ -9,7 +9,7 @@ import {
 import {
   ChevronUp, ChevronDown,
   TrendingUp, TrendingDown,
-  Star, Activity, BarChart2, Zap, ChevronRight,
+  Star, Activity, BarChart2, Zap, ChevronRight, Minus,
 } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import createPlotlyComponent from 'react-plotly.js/factory'
@@ -30,43 +30,63 @@ const Plot = createPlotlyComponent(Plotly)
 type SortKey = 'name' | 'early' | 'mid' | 'recent' | 'growth'
 
 const CATEGORY_COLOR: Record<StoreCategory, string> = {
-  'New Bloomer':          '#10b981',
-  'Rising Star':          '#eab308',
-  'Growing Store':        '#3b82f6',
-  'Consistent Performer': '#8b5cf6',
-  'Declining Store':      '#f97316',
-  'Fallen Star':          '#dc2626',
-  'Low Volume Store':     '#9ca3af',
+  'New Bloomer':    '#10b981',
+  'Rising Star':    '#eab308',
+  'Growing Store':  '#3b82f6',
+  'Constant Store': '#8b5cf6',
+  'Declining Store':'#f97316',
+  'Fallen Star':    '#dc2626',
+  'Inactive Store': '#9ca3af',
 }
 
 const CATEGORY_BADGE: Record<StoreCategory, string> = {
-  'New Bloomer':          'bg-emerald-100 text-emerald-700',
-  'Rising Star':          'bg-yellow-100 text-yellow-700',
-  'Growing Store':        'bg-blue-100 text-blue-700',
-  'Consistent Performer': 'bg-violet-100 text-violet-700',
-  'Declining Store':      'bg-orange-100 text-orange-700',
-  'Fallen Star':          'bg-red-100 text-red-700',
-  'Low Volume Store':     'bg-gray-100 text-gray-600',
+  'New Bloomer':    'bg-emerald-100 text-emerald-700',
+  'Rising Star':    'bg-yellow-100 text-yellow-700',
+  'Growing Store':  'bg-blue-100 text-blue-700',
+  'Constant Store': 'bg-violet-100 text-violet-700',
+  'Declining Store':'bg-orange-100 text-orange-700',
+  'Fallen Star':    'bg-red-100 text-red-700',
+  'Inactive Store': 'bg-gray-100 text-gray-500',
 }
 
 const CATEGORY_DESC: Record<StoreCategory, string> = {
-  'New Bloomer':          `Early or mid activity < 10, recent ≥ 10 — store just becoming active`,
-  'Rising Star':          `Early ≥ 10, growth ≥ 30%, recent > mid > early — strong sustained growth`,
-  'Growing Store':        `Early ≥ 10, growth 10–30%, recent > early — steady improvement`,
-  'Consistent Performer': `Growth between −10% and +10% — stable, reliable performance`,
-  'Declining Store':      `Growth −10% to −30%, recent < early — performance weakening`,
-  'Fallen Star':          `Early ≥ 10, growth ≤ −30%, recent < early — significant decline`,
-  'Low Volume Store':     `Does not meet any trajectory threshold — insufficient activity`,
+  'New Bloomer':    `Early activity ≤ 10 and ≤ 10% of recent — store just entering the market`,
+  'Rising Star':    `Strict early < mid < recent, growth ≥ 30%, recent above network median`,
+  'Growing Store':  `Recent > early, growth ≥ 15% — steady improvement, not yet Rising Star`,
+  'Constant Store': `No strong directional trend — stable or low-activity store`,
+  'Declining Store':`Recent < early, decline ≥ 15% — performance weakening`,
+  'Fallen Star':    `Strict early > mid > recent, decline ≥ 30%, early above network median`,
+  'Inactive Store': `Zero revenue in both mid and recent phases — store has gone dormant`,
 }
 
 const CATEGORY_ICON: Record<StoreCategory, React.ReactNode> = {
-  'New Bloomer':          <Zap        className="h-4 w-4" />,
-  'Rising Star':          <Star       className="h-4 w-4" />,
-  'Growing Store':        <TrendingUp className="h-4 w-4" />,
-  'Consistent Performer': <BarChart2  className="h-4 w-4" />,
-  'Declining Store':      <Activity   className="h-4 w-4" />,
-  'Fallen Star':          <TrendingDown className="h-4 w-4" />,
-  'Low Volume Store':     <Zap        className="h-4 w-4" />,
+  'New Bloomer':    <Zap          className="h-4 w-4" />,
+  'Rising Star':    <Star         className="h-4 w-4" />,
+  'Growing Store':  <TrendingUp   className="h-4 w-4" />,
+  'Constant Store': <BarChart2    className="h-4 w-4" />,
+  'Declining Store':<Activity     className="h-4 w-4" />,
+  'Fallen Star':    <TrendingDown className="h-4 w-4" />,
+  'Inactive Store': <Minus        className="h-4 w-4" />,
+}
+
+const CATEGORY_INSIGHT: Record<StoreCategory, string> = {
+  'New Bloomer':    'Minimal early Revenue and Plans Sold, now showing measurable traction in both.',
+  'Rising Star':    'Strong and consistent growth in both Revenue and Plans Sold across all phases.',
+  'Growing Store':  'Positive momentum in Revenue and Plans Sold with room for further acceleration.',
+  'Constant Store': 'Stable Revenue and Plans Sold with no strong directional trend across phases.',
+  'Declining Store':'Revenue and Plans Sold are weakening — store requires monitoring and intervention.',
+  'Fallen Star':    'Previously strong in Revenue and Plans Sold, now in sustained decline across phases.',
+  'Inactive Store': 'No Revenue or Plans Sold recorded in mid and recent phases — store is dormant.',
+}
+
+const CATEGORY_REASON: Record<StoreCategory, string> = {
+  'New Bloomer':    'Low early activity (Revenue & Plans) — now gaining traction.',
+  'Rising Star':    'Early < Mid < Recent in Revenue & Plans, growth ≥ 30%, above network median.',
+  'Growing Store':  'Recent Revenue & Plans > Early, growth ≥ 15% — improving but not yet Rising Star.',
+  'Constant Store': 'No strong directional trend in Revenue or Plans Sold — stable.',
+  'Declining Store':'Recent Revenue & Plans < Early by ≥ 15% — performance weakening.',
+  'Fallen Star':    'Early > Mid > Recent in Revenue & Plans, decline ≥ 30%, was above network median.',
+  'Inactive Store': 'Mid and recent phase Revenue both zero — store has gone dormant.',
 }
 
 // ── AnimatedNumber ────────────────────────────────────────────────────────────
@@ -102,18 +122,25 @@ function MiniBar({ ratio, color }: { ratio: number; color: string }) {
 interface Props {
   filters: FilterState
   onNavigateToStore?: (storeId: string) => void
+  initialCategory?: StoreCategory | null
 }
 
-export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
+export default function StoreJourneyMap({ filters, onNavigateToStore, initialCategory }: Props) {
   const { classification } = useDataContext()
   const navigate = useNavigate()
 
-  const [activeCategory, setActiveCategory] = useState<StoreCategory | null>(null)
+  const [activeCategory, setActiveCategory] = useState<StoreCategory | null>(initialCategory ?? null)
   const [sortKey, setSortKey]               = useState<SortKey>('recent')
   const [sortDir, setSortDir]               = useState<'asc' | 'desc'>('desc')
   const [hintStoreId, setHintStoreId]       = useState<string | null>(null)
   const [auditOpen, setAuditOpen]           = useState(false)
   const [logScale, setLogScale]             = useState(false)
+  const [viewMode, setViewMode]             = useState<'overall' | 'breakdown'>('overall')
+
+  // Sync when App navigates here with a pre-selected category
+  useEffect(() => {
+    if (initialCategory !== undefined) setActiveCategory(initialCategory ?? null)
+  }, [initialCategory])
 
   const lastClickedStoreRef = useRef<string | null>(null)
   const hintTimerRef        = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -128,14 +155,16 @@ export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
     if (filters.state)    scope = scope.filter(m => m.store.state    === filters.state)
     if (filters.category) scope = scope.filter(m => m.store.category === filters.category)
 
-    // Month range: used only for recomputing totalRev display in this tab's context
-    // Classification itself is always from the full-dataset engine run
+    const { earlyMonths, midMonths, recentMonths } = classification.phases
+
     return scope.map(m => ({
       ...m,
-      // totalRev for bubble sizing — use totalRevenue * total months as proxy
-      totalRev: m.totalRevenue,
+      totalRev:     m.totalRevenue,
+      earlyPlans:   earlyMonths.reduce((s, mo) => s + (m.store.monthly_plans_count?.[mo] ?? 0), 0),
+      midPlans:     midMonths.reduce((s, mo) => s + (m.store.monthly_plans_count?.[mo] ?? 0), 0),
+      recentPlans:  recentMonths.reduce((s, mo) => s + (m.store.monthly_plans_count?.[mo] ?? 0), 0),
     }))
-  }, [classification.metrics, filters])
+  }, [classification, filters])
 
   // ── Summary counts ────────────────────────────────────────────────────────
 
@@ -201,6 +230,61 @@ export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
     })
 
     return [refLine, ...dataTraces]
+  }, [classified, logScale])
+
+  // ── Per-category mini scatter traces (breakdown view) ────────────────────
+
+  const breakdownData = useMemo(() => {
+    if (classified.length === 0) return [] as { cat: StoreCategory; traces: object[] }[]
+    const maxRev = Math.max(...classified.map(c => c.totalRev), 1)
+
+    return CATEGORY_ORDER.map(cat => {
+      const group = classified.filter(c => c.category === cat)
+      if (group.length === 0) return { cat, traces: [] as object[] }
+
+      const vals   = group.flatMap(c => [c.earlyTotal, c.recentTotal])
+      const maxVal = Math.max(...vals, 1) * 1.15
+      const posVals = vals.filter(v => v > 0)
+      const minPos  = logScale && posVals.length > 0 ? Math.max(1, Math.min(...posVals) * 0.7) : 0
+
+      const refLine = {
+        type: 'scatter' as const,
+        mode: 'lines' as const,
+        name: 'Y = X',
+        x: [minPos, maxVal],
+        y: [minPos, maxVal],
+        line:      { dash: 'dot' as const, color: '#cbd5e1', width: 1.5 },
+        hoverinfo: 'skip' as const,
+        showlegend: false,
+      }
+
+      const dataTrace = {
+        type: 'scatter' as const,
+        mode: 'markers' as const,
+        name: cat,
+        x:          group.map(c => Math.max(c.earlyTotal,  logScale ? 0.01 : 0)),
+        y:          group.map(c => Math.max(c.recentTotal, logScale ? 0.01 : 0)),
+        customdata: group.map(c => c.store.store_id),
+        text: group.map(c =>
+          `${c.store.store_name ?? c.store.store_id}`
+          + `<br>${c.store.state ?? ''}${c.store.category ? ` · ${c.store.category}` : ''}`
+          + `<br>Growth: ${c.growthPct != null ? fmtPct(c.growthPct) : 'N/A'}`
+        ),
+        marker: {
+          size:     group.map(c => c.totalRev),
+          sizemode: 'area' as const,
+          sizeref:  (2 * maxRev) / (28 ** 2),
+          sizemin:  4,
+          color:    CATEGORY_COLOR[cat],
+          opacity:  0.82,
+          line:     { color: '#ffffff', width: 1 },
+        },
+        hovertemplate:
+          '<b>%{text}</b><br>Early: ₹%{x:,.0f}<br>Recent: ₹%{y:,.0f}<extra></extra>',
+      }
+
+      return { cat, traces: [refLine, dataTrace] as object[] }
+    })
   }, [classified, logScale])
 
   // ── Scatter click handlers ────────────────────────────────────────────────
@@ -351,7 +435,7 @@ export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
         })}
       </motion.div>
 
-      {/* Scatter Plot */}
+      {/* Scatter Plot / Category Breakdown */}
       <motion.div {...panelSpring(0.12)} className={cardCls}>
         <div className="flex items-start justify-between gap-2 flex-wrap mb-3">
           <div>
@@ -360,84 +444,190 @@ export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
               X = early phase · Y = recent phase · bubble size ∝ total revenue · dotted = no change
             </p>
           </div>
-          <button
-            onClick={() => setLogScale(s => !s)}
-            className={cn(
-              'text-[11px] px-2.5 py-1 rounded-full border transition-colors whitespace-nowrap shrink-0',
-              logScale
-                ? 'bg-violet-600 text-white border-violet-600'
-                : 'bg-white text-gray-500 border-gray-200 hover:border-violet-300 hover:text-violet-600',
-            )}
-          >
-            {logScale ? 'Log scale ✓' : 'Log scale'}
-          </button>
+          <div className="flex items-center gap-2 flex-wrap shrink-0">
+            {/* View mode toggle */}
+            <div className="flex items-center border border-gray-200 rounded-full overflow-hidden text-[11px]">
+              <button
+                onClick={() => setViewMode('overall')}
+                className={cn(
+                  'px-3 py-1 transition-colors whitespace-nowrap',
+                  viewMode === 'overall'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white text-gray-500 hover:text-gray-700',
+                )}
+              >
+                Overall View
+              </button>
+              <button
+                onClick={() => setViewMode('breakdown')}
+                className={cn(
+                  'px-3 py-1 transition-colors border-l border-gray-200 whitespace-nowrap',
+                  viewMode === 'breakdown'
+                    ? 'bg-blue-600 text-white border-l-blue-600'
+                    : 'bg-white text-gray-500 hover:text-gray-700',
+                )}
+              >
+                Category Breakdown
+              </button>
+            </div>
+            {/* Log scale */}
+            <button
+              onClick={() => setLogScale(s => !s)}
+              className={cn(
+                'text-[11px] px-2.5 py-1 rounded-full border transition-colors whitespace-nowrap',
+                logScale
+                  ? 'bg-violet-600 text-white border-violet-600'
+                  : 'bg-white text-gray-500 border-gray-200 hover:border-violet-300 hover:text-violet-600',
+              )}
+            >
+              {logScale ? 'Log scale ✓' : 'Log scale'}
+            </button>
+          </div>
         </div>
 
-        {scatterTraces.length > 0 ? (
-          <>
-            <Plot
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              data={scatterTraces as any}
-              layout={{
-                paper_bgcolor: 'rgba(0,0,0,0)',
-                plot_bgcolor:  'rgba(0,0,0,0)',
-                font:   { color: PT.font, family: 'Inter, sans-serif', size: 11 },
-                legend: { bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, size: 10 }, orientation: 'h' as const, y: -0.18 },
-                xaxis:  {
-                  type:        logScale ? 'log' as const : 'linear' as const,
-                  gridcolor:   PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true,
-                  title:       { text: 'Early Phase Revenue (₹)' },
-                  tickprefix:  '₹',
-                  tickformat:  logScale ? '.2s' : ',.0f',
-                },
-                yaxis:  {
-                  type:        logScale ? 'log' as const : 'linear' as const,
-                  gridcolor:   PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true,
-                  title:       { text: 'Recent Phase Revenue (₹)' },
-                  tickprefix:  '₹',
-                  tickformat:  logScale ? '.2s' : ',.0f',
-                },
-                hovermode:  'closest' as const,
-                margin:     { l: 80, r: 20, t: 8, b: 90 },
-                height:     460,
-                uirevision: 'constant',
-                annotations: [
-                  {
-                    x: 0.02, y: 0.98, xref: 'paper' as const, yref: 'paper' as const,
-                    text: '▲ Growth Zone', showarrow: false,
-                    font: { color: '#10b981', size: 11, family: 'Inter, sans-serif' },
-                    align: 'left' as const, xanchor: 'left' as const, yanchor: 'top' as const,
+        {viewMode === 'overall' ? (
+          /* ── Overall scatter ─────────────────────────────────────────── */
+          scatterTraces.length > 0 ? (
+            <>
+              <Plot
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                data={scatterTraces as any}
+                layout={{
+                  paper_bgcolor: 'rgba(0,0,0,0)',
+                  plot_bgcolor:  'rgba(0,0,0,0)',
+                  font:   { color: PT.font, family: 'Inter, sans-serif', size: 11 },
+                  legend: { bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, size: 10 }, orientation: 'h' as const, y: -0.18 },
+                  xaxis:  {
+                    type:        logScale ? 'log' as const : 'linear' as const,
+                    gridcolor:   PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true,
+                    title:       { text: 'Early Phase Revenue (₹)' },
+                    tickprefix:  '₹',
+                    tickformat:  logScale ? '.2s' : ',.0f',
                   },
-                  {
-                    x: 0.98, y: 0.02, xref: 'paper' as const, yref: 'paper' as const,
-                    text: '▼ Decline Zone', showarrow: false,
-                    font: { color: '#dc2626', size: 11, family: 'Inter, sans-serif' },
-                    align: 'right' as const, xanchor: 'right' as const, yanchor: 'bottom' as const,
+                  yaxis:  {
+                    type:        logScale ? 'log' as const : 'linear' as const,
+                    gridcolor:   PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true,
+                    title:       { text: 'Recent Phase Revenue (₹)' },
+                    tickprefix:  '₹',
+                    tickformat:  logScale ? '.2s' : ',.0f',
                   },
-                ],
-              }}
-              config={{ displayModeBar: false, responsive: true }}
-              style={{ width: '100%', cursor: 'pointer' }}
-              onClick={handlePlotClick}
-              onDoubleClick={handlePlotDoubleClick}
-            />
+                  hovermode:  'closest' as const,
+                  margin:     { l: 80, r: 20, t: 8, b: 90 },
+                  height:     460,
+                  uirevision: 'constant',
+                  annotations: [
+                    {
+                      x: 0.02, y: 0.98, xref: 'paper' as const, yref: 'paper' as const,
+                      text: '▲ Growth Zone', showarrow: false,
+                      font: { color: '#10b981', size: 11, family: 'Inter, sans-serif' },
+                      align: 'left' as const, xanchor: 'left' as const, yanchor: 'top' as const,
+                    },
+                    {
+                      x: 0.98, y: 0.02, xref: 'paper' as const, yref: 'paper' as const,
+                      text: '▼ Decline Zone', showarrow: false,
+                      font: { color: '#dc2626', size: 11, family: 'Inter, sans-serif' },
+                      align: 'right' as const, xanchor: 'right' as const, yanchor: 'bottom' as const,
+                    },
+                  ],
+                }}
+                config={{ displayModeBar: false, responsive: true }}
+                style={{ width: '100%', cursor: 'pointer' }}
+                onClick={handlePlotClick}
+                onDoubleClick={handlePlotDoubleClick}
+              />
 
-            <motion.div
-              initial={false}
-              animate={{ opacity: hintStoreId ? 1 : 0, y: hintStoreId ? 0 : 4 }}
-              transition={{ duration: 0.15 }}
-              className="mt-2 flex items-center gap-2 text-[11px] text-blue-600 bg-blue-50 border border-blue-100 rounded-lg px-3 py-1.5"
-              style={{ pointerEvents: 'none' }}
-            >
-              <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse shrink-0" />
-              <span>
-                <span className="font-semibold">{hintStoreId}</span>
-                {hintStoreId && ' selected — double-click to open Store Spotlight'}
-              </span>
-            </motion.div>
-          </>
+              <motion.div
+                initial={false}
+                animate={{ opacity: hintStoreId ? 1 : 0, y: hintStoreId ? 0 : 4 }}
+                transition={{ duration: 0.15 }}
+                className="mt-2 flex items-center gap-2 text-[11px] text-blue-600 bg-blue-50 border border-blue-100 rounded-lg px-3 py-1.5"
+                style={{ pointerEvents: 'none' }}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse shrink-0" />
+                <span>
+                  <span className="font-semibold">{hintStoreId}</span>
+                  {hintStoreId && ' selected — double-click to open Store Spotlight'}
+                </span>
+              </motion.div>
+            </>
+          ) : (
+            <div className={emptyMsg}>Not enough data to render scatter plot</div>
+          )
         ) : (
-          <div className={emptyMsg}>Not enough data to render scatter plot</div>
+          /* ── Category Breakdown grid ─────────────────────────────────── */
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {CATEGORY_ORDER.map(cat => {
+              const catEntry = breakdownData.find(d => d.cat === cat)
+              const count    = counts[cat]
+              const pct      = classified.length > 0 ? Math.round((count / classified.length) * 100) : 0
+              return (
+                <div
+                  key={cat}
+                  className="rounded-xl border border-gray-200 bg-white p-4 flex flex-col gap-2 shadow-sm"
+                  style={{ borderTopColor: CATEGORY_COLOR[cat], borderTopWidth: 3 }}
+                >
+                  {/* Header */}
+                  <div className="flex items-center gap-2">
+                    <span style={{ color: CATEGORY_COLOR[cat] }}>{CATEGORY_ICON[cat]}</span>
+                    <h4 className="text-sm font-semibold" style={{ color: CATEGORY_COLOR[cat] }}>
+                      {cat}
+                    </h4>
+                  </div>
+
+                  {/* KPI */}
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-xl font-bold text-gray-900 tabular-nums">{count}</span>
+                    <span className="text-[11px] text-gray-500">Stores ({pct}%)</span>
+                  </div>
+
+                  {/* Mini scatter */}
+                  {catEntry && catEntry.traces.length > 0 ? (
+                    <Plot
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      data={catEntry.traces as any}
+                      layout={{
+                        paper_bgcolor: 'rgba(0,0,0,0)',
+                        plot_bgcolor:  'rgba(0,0,0,0)',
+                        font:       { color: PT.font, family: 'Inter, sans-serif', size: 10 },
+                        showlegend: false,
+                        xaxis: {
+                          type:       logScale ? 'log' as const : 'linear' as const,
+                          gridcolor:  PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true,
+                          title:      { text: 'Early (₹)', font: { size: 9 } },
+                          tickprefix: '₹',
+                          tickformat: logScale ? '.1s' : ',.0f',
+                          nticks:     4,
+                        },
+                        yaxis: {
+                          type:       logScale ? 'log' as const : 'linear' as const,
+                          gridcolor:  PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true,
+                          title:      { text: 'Recent (₹)', font: { size: 9 } },
+                          tickprefix: '₹',
+                          tickformat: logScale ? '.1s' : ',.0f',
+                          nticks:     4,
+                        },
+                        hovermode:  'closest' as const,
+                        margin:     { l: 65, r: 8, t: 8, b: 55 },
+                        height:     210,
+                        uirevision: `mini-${cat}`,
+                      }}
+                      config={{ displayModeBar: false, responsive: true }}
+                      style={{ width: '100%', cursor: 'pointer' }}
+                      onClick={handlePlotClick}
+                      onDoubleClick={handlePlotDoubleClick}
+                    />
+                  ) : (
+                    <div className="h-[210px] flex items-center justify-center text-gray-400 text-xs">
+                      No stores in this category
+                    </div>
+                  )}
+
+                  {/* Insight footer */}
+                  <p className="text-[11px] text-gray-400 italic">{CATEGORY_INSIGHT[cat]}</p>
+                </div>
+              )
+            })}
+          </div>
         )}
       </motion.div>
 
@@ -477,7 +667,7 @@ export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[720px]">
+          <table className="w-full text-sm min-w-[900px]">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50">
                 <th className="px-3 py-2.5 text-left text-xs text-gray-400 w-8">#</th>
@@ -513,15 +703,18 @@ export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
                     Growth %{sortIcon('growth')}
                   </button>
                 </th>
+                <th className="px-3 py-2.5 text-right text-xs font-medium uppercase tracking-wider text-gray-500 whitespace-nowrap">Early Plans</th>
+                <th className="px-3 py-2.5 text-right text-xs font-medium uppercase tracking-wider text-gray-500 whitespace-nowrap">Mid Plans</th>
+                <th className="px-3 py-2.5 text-right text-xs font-medium uppercase tracking-wider text-gray-500 whitespace-nowrap">Recent Plans</th>
               </tr>
             </thead>
             <tbody>
               {tableRows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-3 py-10 text-center text-gray-400 text-sm">No stores match</td>
+                  <td colSpan={11} className="px-3 py-10 text-center text-gray-400 text-sm">No stores match</td>
                 </tr>
               ) : (
-                tableRows.map(({ store, earlyTotal, midTotal, recentTotal, growthPct, category }, i) => (
+                tableRows.map(({ store, earlyTotal, midTotal, recentTotal, growthPct, category, earlyPlans, midPlans, recentPlans }, i) => (
                   <tr
                     key={store.store_id}
                     onClick={() => onNavigateToStore?.(store.store_id)}
@@ -559,6 +752,15 @@ export default function StoreJourneyMap({ filters, onNavigateToStore }: Props) {
                       growthPct === null ? 'text-gray-400' : growthPct > 0 ? 'text-emerald-600' : 'text-red-500',
                     )}>
                       {growthPct === null ? 'N/A' : fmtPct(growthPct)}
+                    </td>
+                    <td className="px-3 py-2.5 text-right text-gray-400 tabular-nums text-xs whitespace-nowrap">
+                      {earlyPlans.toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2.5 text-right text-violet-500 tabular-nums text-xs whitespace-nowrap">
+                      {midPlans.toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2.5 text-right text-gray-700 font-medium tabular-nums text-xs whitespace-nowrap">
+                      {recentPlans.toLocaleString()}
                     </td>
                   </tr>
                 ))

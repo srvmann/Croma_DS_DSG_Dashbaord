@@ -25,6 +25,7 @@ import StoreDeepDive from './components/tabs/StoreDeepDive'
 import TargetCommandCenter from './components/tabs/TargetCommandCenter'
 import StateJourneyAnalysis from './components/tabs/StateJourneyAnalysis'
 import { cn } from './lib/utils'
+import type { StoreCategory } from './lib/classificationEngine'
 
 // ── Tab registry ──────────────────────────────────────────────────────────────
 
@@ -226,10 +227,16 @@ export default function App() {
 
   const [activeTab, setActiveTab]         = useState<TabId>('executive')
   const [deepDiveStoreId, setDeepDiveStoreId] = useState<string | null>(null)
+  const [journeyPrefilter, setJourneyPrefilter] = useState<StoreCategory | null>(null)
 
   const handleNavigateToStore = useCallback((storeId: string) => {
     setDeepDiveStoreId(storeId)
     setActiveTab('store-deep-dive')
+  }, [])
+
+  const handleNavigateToJourneyCategory = useCallback((category: StoreCategory) => {
+    setJourneyPrefilter(category)
+    setActiveTab('store-journey')
   }, [])
 
   // Show skeleton for at least 400 ms to prevent content flash on fast loads
@@ -364,15 +371,15 @@ export default function App() {
               : activeTab === 'monthly-revenue'
                 ? <MonthlyRevenue filters={filters} />
                 : activeTab === 'store-journey'
-                  ? <StoreJourneyMap filters={filters} onNavigateToStore={handleNavigateToStore} />
+                  ? <StoreJourneyMap filters={filters} onNavigateToStore={handleNavigateToStore} initialCategory={journeyPrefilter} />
                   : activeTab === 'state-journey'
                     ? <StateJourneyAnalysis filters={filters} />
                     : activeTab === 'geo'
                       ? <GeoAnalytics filters={filters} />
                     : activeTab === 'rising-stars'
-                      ? <RisingStars filters={filters} onNavigateToStore={handleNavigateToStore} />
+                      ? <RisingStars filters={filters} onNavigateToStore={handleNavigateToStore} onNavigateToJourneyCategory={handleNavigateToJourneyCategory} />
                       : activeTab === 'fallen-stars'
-                        ? <FallenStars filters={filters} onNavigateToStore={handleNavigateToStore} />
+                        ? <FallenStars filters={filters} onNavigateToStore={handleNavigateToStore} onNavigateToJourneyCategory={handleNavigateToJourneyCategory} />
                         : activeTab === 'revenue-movers'
                           ? <RevenueMovers filters={filters} />
                           : activeTab === 'store-deep-dive'

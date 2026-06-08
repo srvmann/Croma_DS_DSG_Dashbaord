@@ -9,9 +9,10 @@ export interface StoreRecord {
   store_name?: string
   state?: string
   category?: string                          // store tier: A+ / A / B / C / D
-  monthly_sales: Record<string, number>      // DS + DSG combined
-  monthly_sales_ds?: Record<string, number>  // Device Secure only
-  monthly_sales_dsg?: Record<string, number> // Device Secure Gold only
+  monthly_sales: Record<string, number>           // DS + DSG combined revenue
+  monthly_sales_ds?: Record<string, number>       // Device Secure only revenue
+  monthly_sales_dsg?: Record<string, number>      // Device Secure Gold only revenue
+  monthly_plans_count?: Record<string, number>    // transaction row count per month (plan count)
   target?: number | null                     // OOW budget for the target month
   zonal_manager?: string
   cluster_manager?: string

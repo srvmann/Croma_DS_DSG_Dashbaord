@@ -7,19 +7,20 @@ export type StoreCategory =
   | 'New Bloomer'
   | 'Rising Star'
   | 'Growing Store'
-  | 'Consistent Performer'
+  | 'Constant Store'
   | 'Declining Store'
   | 'Fallen Star'
-  | 'Low Volume Store'
+  | 'Inactive Store'
 
+// Display order — emergence → positive trajectory → stable → negative trajectory → terminal
 export const CATEGORY_ORDER: StoreCategory[] = [
   'New Bloomer',
   'Rising Star',
   'Growing Store',
-  'Consistent Performer',
+  'Constant Store',
   'Declining Store',
   'Fallen Star',
-  'Low Volume Store',
+  'Inactive Store',
 ]
 
 export interface PhaseInfo {
@@ -48,9 +49,12 @@ export interface StoreMetrics {
 }
 
 export interface ClassificationResult {
-  phases:  PhaseInfo
-  metrics: StoreMetrics[]
-  counts:  Record<StoreCategory, number>
+  phases:              PhaseInfo
+  metrics:             StoreMetrics[]
+  counts:              Record<StoreCategory, number>
+  medianEarlyRevenue:  number   // median earlyTotal across all stores — used for Fallen Star check
+  medianRecentRevenue: number   // median recentTotal across all stores — used for Rising Star check
+  isValid:             boolean  // true when sum(counts) === stores.length
 }
 
 // ── Phase allocation ──────────────────────────────────────────────────────────
@@ -91,6 +95,14 @@ function phaseTotal(store: StoreRecord, phaseMonths: string[]): number {
   return phaseMonths.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
 }
 
+function medianOf(sorted: number[]): number {
+  if (!sorted.length) return 0
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 !== 0
+    ? sorted[mid]
+    : (sorted[mid - 1] + sorted[mid]) / 2
+}
+
 function computeTrendScore(store: StoreRecord, months: string[]): number {
   const n = months.length
   if (n < 2) return 0
@@ -117,64 +129,65 @@ function computeStabilityScore(store: StoreRecord, months: string[]): number {
   return (Math.sqrt(variance) / mean) * 100
 }
 
-// ── Classification rules (single source of truth) ────────────────────────────
-// Priority order: New Bloomer → Rising Star → Growing Store → Consistent Performer
-//                 → Declining Store → Fallen Star → Low Volume Store
+// ── Classification rules — single source of truth ────────────────────────────
+//
+// Priority order (evaluated in sequence; first match wins):
+//   1. New Bloomer    — store just entering the market; negligible early activity
+//   2. Fallen Star    — established store with strict monotone decline ≥ 30% + above median
+//   3. Rising Star    — established store with strict monotone growth ≥ 30% + above median
+//   4. Declining Store — weakening (not severe enough for Fallen Star)
+//   5. Growing Store   — improving (not strong enough for Rising Star)
+//   6. Constant Store  — all remaining stores (stable or no strong trend)
 
 function classifyStore(
-  earlyTotal:  number,
-  midTotal:    number,
-  recentTotal: number,
-  growthPct:   number | null,
+  earlyTotal:          number,
+  midTotal:            number,
+  recentTotal:         number,
+  growthPct:           number | null,
+  medianEarlyRevenue:  number,
+  medianRecentRevenue: number,
 ): StoreCategory {
-  // Priority 1: New Bloomer — little/no early or mid activity, now contributing
+  // 1. New Bloomer — essentially inactive early, now contributing
   if (
-    (earlyTotal < C.NEW_BLOOMER_EARLY_CEILING || midTotal < C.NEW_BLOOMER_EARLY_CEILING) &&
-    recentTotal >= C.NEW_BLOOMER_ACTIVITY_FLOOR &&
-    recentTotal > earlyTotal
+    earlyTotal <= C.NEW_BLOOMER_EARLY_CEILING &&
+    (earlyTotal === 0 || earlyTotal <= recentTotal * C.NEW_BLOOMER_REVENUE_RATIO) &&
+    recentTotal > earlyTotal &&
+    recentTotal > 0
   ) return 'New Bloomer'
 
-  // Priority 2: Rising Star — established store, strong upward trajectory
-  // Monotonic-phase check removed: a store that dipped mid-phase then surged
-  // still qualifies — growthPct ≥ 30 already guarantees recentTotal > earlyTotal.
-  if (
-    earlyTotal >= C.RISING_STAR_ACTIVITY_FLOOR &&
-    growthPct !== null && growthPct >= C.RISING_STAR_GROWTH
-  ) return 'Rising Star'
+  // 2. Inactive Store — no revenue in both mid and recent phases
+  if (midTotal === 0 && recentTotal === 0) return 'Inactive Store'
 
-  // Priority 3: Growing Store — steady improvement below Rising Star threshold
+  // 3. Fallen Star — strict monotone revenue decline from an established base
   if (
-    earlyTotal >= C.GROWING_STORE_ACTIVITY_FLOOR &&
-    growthPct !== null &&
-    growthPct >= C.GROWING_STORE_MIN_GROWTH &&
-    growthPct <  C.GROWING_STORE_MAX_GROWTH &&
-    recentTotal > earlyTotal
-  ) return 'Growing Store'
-
-  // Priority 4: Consistent Performer — stable performance
-  if (
-    growthPct !== null &&
-    growthPct >= C.CONSISTENT_MIN_GROWTH &&
-    growthPct <= C.CONSISTENT_MAX_GROWTH
-  ) return 'Consistent Performer'
-
-  // Priority 5: Declining Store — moderate negative trajectory
-  if (
-    growthPct !== null &&
-    growthPct < C.DECLINING_MAX_GROWTH &&
-    growthPct > C.DECLINING_MIN_GROWTH &&
-    recentTotal < earlyTotal
-  ) return 'Declining Store'
-
-  // Priority 6: Fallen Star — sharp decline from an established base
-  // Monotonic-phase check removed: a store that spiked mid-phase before collapsing
-  // still qualifies — growthPct ≤ −30 already guarantees recentTotal < earlyTotal.
-  if (
-    earlyTotal >= C.FALLEN_STAR_ACTIVITY_FLOOR &&
-    growthPct !== null && growthPct <= C.FALLEN_STAR_GROWTH
+    earlyTotal > midTotal && midTotal > recentTotal &&
+    growthPct !== null && growthPct <= -C.FALLEN_STAR_DECLINE &&
+    earlyTotal > medianEarlyRevenue
   ) return 'Fallen Star'
 
-  return 'Low Volume Store'
+  // 4. Rising Star — strict monotone revenue growth, commercially significant now
+  if (
+    earlyTotal < midTotal && midTotal < recentTotal &&
+    growthPct !== null && growthPct >= C.RISING_STAR_GROWTH &&
+    recentTotal > medianRecentRevenue
+  ) return 'Rising Star'
+
+  // 5. Declining Store — weakening store; not severe or structured enough for Fallen Star
+  if (
+    growthPct !== null &&
+    recentTotal < earlyTotal &&
+    (earlyTotal - recentTotal) / earlyTotal * 100 >= C.DECLINING_THRESHOLD
+  ) return 'Declining Store'
+
+  // 6. Growing Store — improving store; not structured or large enough for Rising Star
+  if (
+    growthPct !== null &&
+    recentTotal > earlyTotal &&
+    growthPct >= C.GROWING_THRESHOLD
+  ) return 'Growing Store'
+
+  // 7. Constant Store — stable, low-volume, or no strong directional trend
+  return 'Constant Store'
 }
 
 // ── Main engine entry point ───────────────────────────────────────────────────
@@ -198,6 +211,10 @@ export function classifyAllStores(
     return { store, earlyTotal, midTotal, recentTotal, totalRevenue, growthPct, momentumPct, trend, stability }
   })
 
+  // Medians used for Rising Star / Fallen Star significance checks
+  const medianEarlyRevenue  = medianOf([...raw].map(r => r.earlyTotal).sort((a, b) => a - b))
+  const medianRecentRevenue = medianOf([...raw].map(r => r.recentTotal).sort((a, b) => a - b))
+
   const byEarly  = [...raw].sort((a, b) => b.earlyTotal   - a.earlyTotal)
   const byRecent = [...raw].sort((a, b) => b.recentTotal  - a.recentTotal)
   const byTotal  = [...raw].sort((a, b) => b.totalRevenue - a.totalRevenue)
@@ -216,7 +233,10 @@ export function classifyAllStores(
     momentumPct:    r.momentumPct,
     trendScore:     r.trend,
     stabilityScore: r.stability,
-    category:       classifyStore(r.earlyTotal, r.midTotal, r.recentTotal, r.growthPct),
+    category:       classifyStore(
+      r.earlyTotal, r.midTotal, r.recentTotal, r.growthPct,
+      medianEarlyRevenue, medianRecentRevenue,
+    ),
     earlyRank:      earlyRankMap.get(r.store.store_id)  ?? 0,
     recentRank:     recentRankMap.get(r.store.store_id) ?? 0,
     overallRank:    overallRankMap.get(r.store.store_id) ?? 0,
@@ -227,5 +247,15 @@ export function classifyAllStores(
   ) as Record<StoreCategory, number>
   for (const m of metrics) counts[m.category]++
 
-  return { phases, metrics, counts }
+  // Validate: every store must land in exactly one category
+  const totalCategorized = Object.values(counts).reduce((s, c) => s + c, 0)
+  const isValid = totalCategorized === stores.length
+  if (!isValid) {
+    console.error(
+      `[ClassificationEngine] Validation FAILED: ${totalCategorized} categorized vs ${stores.length} stores`,
+      counts,
+    )
+  }
+
+  return { phases, metrics, counts, medianEarlyRevenue, medianRecentRevenue, isValid }
 }

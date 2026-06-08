@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { TrendingUp, Info } from 'lucide-react'
+import { TrendingUp, Info, ArrowRight } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import createPlotlyComponent from 'react-plotly.js/factory'
 // @ts-ignore — plotly.js-dist-min does not ship its own .d.ts
@@ -23,15 +23,18 @@ const POSITIVE_CATEGORIES: StoreCategory[] = ['Rising Star']
 // ── Table columns ─────────────────────────────────────────────────────────────
 
 const TABLE_COLS: { key: SortKey | null; label: string; align: 'left' | 'right' | 'center' }[] = [
-  { key: null,         label: 'Store',       align: 'left'   },
-  { key: 'state',      label: 'State',       align: 'left'   },
-  { key: null,         label: 'Category',    align: 'left'   },
-  { key: 'earlyRev',  label: 'Early Rev',   align: 'right'  },
-  { key: 'recentRev', label: 'Recent Rev',  align: 'right'  },
-  { key: 'growth',     label: 'Growth %',    align: 'right'  },
-  { key: 'earlyRank', label: 'Early Rank',  align: 'center' },
-  { key: 'recentRank',label: 'Recent Rank', align: 'center' },
-  { key: 'health',     label: 'Health %',   align: 'right'  },
+  { key: null,         label: 'Store',        align: 'left'   },
+  { key: 'state',      label: 'State',        align: 'left'   },
+  { key: null,         label: 'Category',     align: 'left'   },
+  { key: 'earlyRev',  label: 'Early Rev',    align: 'right'  },
+  { key: 'recentRev', label: 'Recent Rev',   align: 'right'  },
+  { key: 'growth',     label: 'Growth %',     align: 'right'  },
+  { key: null,         label: 'Early Plans',  align: 'right'  },
+  { key: null,         label: 'Mid Plans',    align: 'right'  },
+  { key: null,         label: 'Recent Plans', align: 'right'  },
+  { key: 'earlyRank', label: 'Early Rank',   align: 'center' },
+  { key: 'recentRank',label: 'Recent Rank',  align: 'center' },
+  { key: 'health',     label: 'Health %',    align: 'right'  },
 ]
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -39,9 +42,11 @@ const TABLE_COLS: { key: SortKey | null; label: string; align: 'left' | 'right' 
 export default function RisingStars({
   filters,
   onNavigateToStore,
+  onNavigateToJourneyCategory,
 }: {
   filters: FilterState
   onNavigateToStore?: (storeId: string) => void
+  onNavigateToJourneyCategory?: (category: StoreCategory) => void
 }) {
   const { classification } = useDataContext()
   const [sortKey, setSortKey] = useState<SortKey>('growth')
@@ -58,6 +63,7 @@ export default function RisingStars({
 
     // Keep only positive-trajectory categories
     const rows = scope.filter(m => POSITIVE_CATEGORIES.includes(m.category))
+    const growingCount = scope.filter(m => m.category === 'Growing Store').length
 
     const total = scope.length   // all visible stores for health % computation
 
@@ -65,20 +71,37 @@ export default function RisingStars({
     const byRecent = [...scope].sort((a, b) => b.recentTotal - a.recentTotal)
     const localRecentRank = new Map(byRecent.map((m, i) => [m.store.store_id, i + 1]))
 
+    const { earlyMonths, midMonths, recentMonths } = classification.phases
+
     const enriched = rows.map(m => ({
       ...m,
       localHealth: total > 0
         ? +((total - (localRecentRank.get(m.store.store_id) ?? total)) / total * 100).toFixed(1)
         : 0,
+      earlyPlans:  earlyMonths.reduce((s, mo) => s + (m.store.monthly_plans_count?.[mo] ?? 0), 0),
+      midPlans:    midMonths.reduce((s, mo) => s + (m.store.monthly_plans_count?.[mo] ?? 0), 0),
+      recentPlans: recentMonths.reduce((s, mo) => s + (m.store.monthly_plans_count?.[mo] ?? 0), 0),
     }))
 
-    const totalEarly  = enriched.reduce((s, r) => s + r.earlyTotal,  0)
-    const totalRecent = enriched.reduce((s, r) => s + r.recentTotal, 0)
-    const topRiser    = enriched.length > 0
+    const topRiser = enriched.length > 0
       ? enriched.reduce((best, r) => (r.growthPct ?? -Infinity) > (best.growthPct ?? -Infinity) ? r : best)
       : null
-    const avgGrowth   = enriched.length > 0
-      ? enriched.reduce((s, r) => s + (r.growthPct ?? 0), 0) / enriched.length
+
+    // Median growth % — more robust than average for skewed distributions
+    const growthsSorted = [...enriched]
+      .map(r => r.growthPct ?? 0)
+      .sort((a, b) => a - b)
+    const mid = Math.floor(growthsSorted.length / 2)
+    const medianGrowth = growthsSorted.length === 0 ? 0
+      : growthsSorted.length % 2 !== 0
+        ? growthsSorted[mid]
+        : (growthsSorted[mid - 1] + growthsSorted[mid]) / 2
+
+    // Network revenue share — Rising Stars' recent total vs full network
+    const networkRecentTotal = scope.reduce((s, m) => s + m.recentTotal, 0)
+    const risingRecentTotal  = enriched.reduce((s, r) => s + r.recentTotal, 0)
+    const networkSharePct = networkRecentTotal > 0
+      ? risingRecentTotal / networkRecentTotal * 100
       : 0
 
     const top15 = [...enriched]
@@ -87,7 +110,7 @@ export default function RisingStars({
 
     return {
       rows: enriched,
-      kpi: { count: enriched.length, addedRevenue: totalRecent - totalEarly, earlyTotal: totalEarly, recentTotal: totalRecent, topRiser, avgGrowth },
+      kpi: { count: enriched.length, growingCount, topRiser, medianGrowth, networkSharePct },
       top15,
     }
   }, [classification, filters])
@@ -117,13 +140,20 @@ export default function RisingStars({
 
   const { chartTraces, chartCategories } = useMemo(() => {
     if (top15.length === 0) return { chartTraces: [] as object[], chartCategories: [] as string[] }
-    const ordered     = [...top15].sort((a, b) => a.recentTotal - b.recentTotal)
+
+    const { earlyMonths, midMonths, recentMonths } = classification.phases
+    const ec = earlyMonths.length  || 1
+    const mc = midMonths.length    || 1
+    const rc = recentMonths.length || 1
+
+    const ordered = [...top15].sort((a, b) => a.recentTotal / rc - b.recentTotal / rc)
     const chartCategories = ordered.map(r => r.store.store_id)
 
+    // Connector line spanning early avg → recent avg (mid dot sits on this line)
     const lines = ordered.map(row => ({
       type: 'scatter' as const,
       mode: 'lines' as const,
-      x: [row.earlyTotal, row.recentTotal],
+      x: [row.earlyTotal / ec, row.recentTotal / rc],
       y: [row.store.store_id, row.store.store_id],
       showlegend: false,
       line:  { color: '#d1d5db', width: 2 },
@@ -134,24 +164,34 @@ export default function RisingStars({
       type: 'scatter' as const,
       mode: 'markers' as const,
       name: 'Early',
-      x:    ordered.map(r => r.earlyTotal),
+      x:    ordered.map(r => r.earlyTotal / ec),
       y:    ordered.map(r => r.store.store_id),
       marker: { symbol: 'circle', size: 10, color: '#9ca3af' },
-      hovertemplate: '<b>%{y}</b><br>Early: ₹%{x:,.0f}/mo<extra></extra>',
+      hovertemplate: '<b>%{y}</b><br>Early: ₹%{x:,.0f}<extra></extra>',
+    }
+
+    const midTrace = {
+      type: 'scatter' as const,
+      mode: 'markers' as const,
+      name: 'Mid',
+      x:    ordered.map(r => r.midTotal / mc),
+      y:    ordered.map(r => r.store.store_id),
+      marker: { symbol: 'diamond', size: 9, color: '#8b5cf6' },
+      hovertemplate: '<b>%{y}</b><br>Mid: ₹%{x:,.0f}<extra></extra>',
     }
 
     const recentTrace = {
       type: 'scatter' as const,
       mode: 'markers' as const,
       name: 'Recent',
-      x:    ordered.map(r => r.recentTotal),
+      x:    ordered.map(r => r.recentTotal / rc),
       y:    ordered.map(r => r.store.store_id),
       marker: { symbol: 'circle', size: 10, color: '#3b82f6' },
-      hovertemplate: '<b>%{y}</b><br>Recent: ₹%{x:,.0f}/mo<extra></extra>',
+      hovertemplate: '<b>%{y}</b><br>Recent: ₹%{x:,.0f}<extra></extra>',
     }
 
-    return { chartTraces: [...lines, earlyTrace, recentTrace], chartCategories }
-  }, [top15])
+    return { chartTraces: [...lines, earlyTrace, midTrace, recentTrace], chartCategories }
+  }, [top15, classification.phases])
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -180,28 +220,34 @@ export default function RisingStars({
           Stores Gaining Momentum
         </h2>
         <p className="text-sm text-gray-500 mt-1">
-          {rows.length} Rising Star stores — stores that have shown strong upward momentum.
+          {rows.length} Rising Star stores — stores with strict phase-over-phase growth (Early &lt; Mid &lt; Recent)
+          in both Revenue and Plans Sold, achieving ≥ 30% growth and above-network-median recent activity.
           These are the network's bright spots worth nurturing.
         </p>
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Rising Stores</p>
-          <p className="text-3xl font-bold text-gray-900">{kpi.count}</p>
-          <p className="text-xs text-gray-400 mt-1">in current scope</p>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+          <p className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wider mb-2">Rising Stars</p>
+          <p className="text-3xl font-bold text-emerald-700">{kpi.count}</p>
+          <p className="text-xs text-emerald-500 mt-1">in current scope</p>
         </div>
 
-        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Added Revenue</p>
-          <p className="text-2xl font-bold text-gray-900">{fmtInr(kpi.addedRevenue)}</p>
-          <p className="text-xs text-gray-400 mt-1">{fmtInr(kpi.earlyTotal)} → {fmtInr(kpi.recentTotal)}</p>
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 shadow-sm">
+          <p className="text-[10px] font-semibold text-blue-600 uppercase tracking-wider mb-2">Growing Stores</p>
+          <p className="text-3xl font-bold text-blue-700">{kpi.growingCount}</p>
+          <button
+            onClick={() => onNavigateToJourneyCategory?.('Growing Store')}
+            className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-800 font-medium transition-colors"
+          >
+            View all <ArrowRight className="h-3 w-3" />
+          </button>
         </div>
 
         <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
           <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Top Riser</p>
-          <p className="text-2xl font-bold text-gray-900">
+          <p className="text-2xl font-bold text-gray-900 truncate">
             {kpi.topRiser?.store.store_name ?? kpi.topRiser?.store.store_id ?? '—'}
           </p>
           <p className="text-xs text-emerald-600 mt-1">
@@ -210,9 +256,15 @@ export default function RisingStars({
         </div>
 
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
-          <p className="text-[10px] font-semibold text-amber-600 uppercase tracking-wider mb-2">Avg Growth</p>
-          <p className="text-2xl font-bold text-amber-700">{fmtPct(kpi.avgGrowth)}</p>
-          <p className="text-xs text-amber-500 mt-1">Mean phase growth</p>
+          <p className="text-[10px] font-semibold text-amber-600 uppercase tracking-wider mb-2">Median Growth</p>
+          <p className="text-2xl font-bold text-amber-700">{fmtPct(kpi.medianGrowth)}</p>
+          <p className="text-xs text-amber-500 mt-1">Typical rising star</p>
+        </div>
+
+        <div className="rounded-xl border border-violet-200 bg-violet-50 p-4 shadow-sm">
+          <p className="text-[10px] font-semibold text-violet-600 uppercase tracking-wider mb-2">Network Share</p>
+          <p className="text-2xl font-bold text-violet-700">{kpi.networkSharePct.toFixed(1)}%</p>
+          <p className="text-xs text-violet-500 mt-1">of recent revenue</p>
         </div>
       </div>
 
@@ -229,8 +281,8 @@ export default function RisingStars({
       {/* Dumbbell chart */}
       {top15.length > 0 && (
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h3 className="text-sm font-semibold text-gray-700">Early → Recent Revenue Shift</h3>
-          <p className="text-xs text-gray-400 mt-0.5 mb-4">Top {top15.length} by recent revenue</p>
+          <h3 className="text-sm font-semibold text-gray-700">Early → Mid → Recent Revenue</h3>
+          <p className="text-xs text-gray-400 mt-0.5 mb-4">Top {top15.length} by recent phase total · ● Early · ◆ Mid · ● Recent</p>
           <Plot
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             data={chartTraces as any}
@@ -243,7 +295,7 @@ export default function RisingStars({
               xaxis: {
                 gridcolor: '#f3f4f6', linecolor: '#e5e7eb',
                 tickprefix: '₹', tickformat: ',.0f', automargin: true,
-                title: { text: 'Revenue collected (phase total)', font: { color: '#9ca3af', size: 11 } },
+                title: { text: 'Revenue — phase total (₹)', font: { color: '#9ca3af', size: 11 } },
               },
               yaxis: {
                 gridcolor: '#f3f4f6', linecolor: '#e5e7eb',
@@ -322,6 +374,15 @@ export default function RisingStars({
                   </td>
                   <td className="px-4 py-2.5 text-right font-semibold text-emerald-600 tabular-nums">
                     {row.growthPct != null ? fmtPct(row.growthPct) : '—'}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-gray-400 tabular-nums">
+                    {row.earlyPlans.toLocaleString()}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-violet-500 tabular-nums">
+                    {row.midPlans.toLocaleString()}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-gray-700 font-medium tabular-nums">
+                    {row.recentPlans.toLocaleString()}
                   </td>
                   <td className="px-4 py-2.5 text-center text-gray-400 tabular-nums">
                     {row.earlyRank}

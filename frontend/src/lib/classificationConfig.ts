@@ -2,28 +2,21 @@
 // (sum of monthly_sales across the phase's months, which equals policies sold).
 // Growth % = (recentTotal - earlyTotal) / earlyTotal × 100
 export const CLASSIFICATION_CONFIG = {
-  // New Bloomer — store had little/no activity early or mid, now contributing
-  NEW_BLOOMER_ACTIVITY_FLOOR:  10,   // recentTotal must be >= this
-  NEW_BLOOMER_EARLY_CEILING:   10,   // earlyTotal OR midTotal must be < this
+  // New Bloomer — essentially inactive early, now contributing
+  NEW_BLOOMER_EARLY_CEILING:  10,    // earlyTotal must be ≤ this
+  NEW_BLOOMER_REVENUE_RATIO:  0.10,  // earlyTotal must be ≤ this fraction of recentTotal (OR earlyTotal = 0)
 
-  // Rising Star — established store with strong growth
-  RISING_STAR_ACTIVITY_FLOOR:  10,   // earlyTotal must be >= this
-  RISING_STAR_GROWTH:          30,   // growth % must be >= this
+  // Fallen Star — established store, strict monotone decline ≥ 30%
+  // Requires: earlyTotal > midTotal > recentTotal AND earlyTotal > medianEarlyRevenue
+  FALLEN_STAR_DECLINE:        30,    // ((earlyTotal - recentTotal) / earlyTotal) × 100 must be ≥ this
 
-  // Growing Store — steady improvement (below Rising Star threshold)
-  GROWING_STORE_ACTIVITY_FLOOR: 10,  // earlyTotal must be >= this
-  GROWING_STORE_MIN_GROWTH:    10,   // growth % >= this (inclusive)
-  GROWING_STORE_MAX_GROWTH:    30,   // growth % < this (exclusive → Rising Star)
+  // Rising Star — established store, strict monotone growth ≥ 30%
+  // Requires: earlyTotal < midTotal < recentTotal AND recentTotal > medianRecentRevenue
+  RISING_STAR_GROWTH:         30,    // ((recentTotal - earlyTotal) / earlyTotal) × 100 must be ≥ this
 
-  // Consistent Performer — stable, no strong trend either way
-  CONSISTENT_MIN_GROWTH:      -10,   // growth % >= this (inclusive)
-  CONSISTENT_MAX_GROWTH:       10,   // growth % <= this (inclusive)
+  // Declining Store — weakening store (not severe enough for Fallen Star)
+  DECLINING_THRESHOLD:        15,    // ((earlyTotal - recentTotal) / earlyTotal) × 100 must be ≥ this
 
-  // Declining Store — moderate negative trajectory
-  DECLINING_MIN_GROWTH:       -30,   // growth % > this (exclusive floor → Fallen Star)
-  DECLINING_MAX_GROWTH:       -10,   // growth % < this (exclusive ceiling)
-
-  // Fallen Star — sharp decline from an established base
-  FALLEN_STAR_ACTIVITY_FLOOR:  10,   // earlyTotal must be >= this
-  FALLEN_STAR_GROWTH:         -30,   // growth % <= this
+  // Growing Store — improving store (not yet Rising Star level)
+  GROWING_THRESHOLD:          15,    // growth % must be ≥ this
 } as const

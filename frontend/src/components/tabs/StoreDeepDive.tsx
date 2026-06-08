@@ -82,13 +82,13 @@ const JOURNEY_BADGE_DARK: Record<JourneyTag, string> = {
 }
 
 const CATEGORY_BADGE_DARK: Record<StoreCategory, string> = {
-  'New Bloomer':          'bg-emerald-400/20 text-emerald-300 border border-emerald-400/35',
-  'Rising Star':          'bg-yellow-400/20 text-yellow-300 border border-yellow-400/35',
-  'Growing Store':        'bg-blue-400/20 text-blue-300 border border-blue-400/35',
-  'Consistent Performer': 'bg-violet-400/20 text-violet-300 border border-violet-400/35',
-  'Declining Store':      'bg-orange-400/20 text-orange-300 border border-orange-400/35',
-  'Fallen Star':          'bg-red-400/20 text-red-300 border border-red-400/35',
-  'Low Volume Store':     'bg-slate-400/20 text-slate-300 border border-slate-400/35',
+  'New Bloomer':    'bg-emerald-400/20 text-emerald-300 border border-emerald-400/35',
+  'Rising Star':    'bg-yellow-400/20 text-yellow-300 border border-yellow-400/35',
+  'Growing Store':  'bg-blue-400/20 text-blue-300 border border-blue-400/35',
+  'Constant Store': 'bg-violet-400/20 text-violet-300 border border-violet-400/35',
+  'Declining Store':'bg-orange-400/20 text-orange-300 border border-orange-400/35',
+  'Fallen Star':    'bg-red-400/20 text-red-300 border border-red-400/35',
+  'Inactive Store': 'bg-gray-400/20 text-gray-300 border border-gray-400/35',
 }
 
 const ACTIVITY_BADGE: Record<ActivityStatus, string> = {
