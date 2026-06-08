@@ -6,10 +6,9 @@ import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
-import { allocatePhases } from '@/lib/classificationEngine'
+import { allocatePhases, classifyAllStores } from '@/lib/classificationEngine'
+import type { StoreCategory } from '@/lib/classificationEngine'
 import { fmtInr, fmtPct } from '@/lib/formatting'
-import { panelSpring as makePanelSpring } from '@/lib/animations'
-import { PT } from '@/lib/plotlyTheme'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -58,27 +57,48 @@ const STATE_CENTROIDS: Record<string, [number, number]> = {
   'Daman and Diu':              [20.4,  72.8],
 }
 
-// ── Growth colorscale: red (–40 %) → amber (0 %) → dark-green (+40 %) ─────────
+// ── Premium diverging growth colorscale ───────────────────────────────────────
 const GROWTH_CS = [
-  [0,    '#991b1b'],
-  [0.2,  '#ef4444'],
-  [0.35, '#f97316'],
-  [0.5,  '#fbbf24'],
-  [0.65, '#a3e635'],
-  [0.8,  '#16a34a'],
-  [1,    '#14532d'],
+  [0,    '#8B1E3F'],
+  [0.25, '#D97757'],
+  [0.5,  '#E5E7EB'],
+  [0.75, '#7CC576'],
+  [1,    '#145A32'],
 ]
 
-const LEGEND_CATS = [
-  { label: 'Strong growth', color: '#14532d' },
-  { label: 'Growth',        color: '#16a34a' },
-  { label: 'Stable',        color: '#fbbf24' },
-  { label: 'Declining',     color: '#f97316' },
-  { label: 'Critical',      color: '#991b1b' },
-]
+// Plotly geo layout constants — shared across renders; never changes
+const GEO_LAYOUT = {
+  fitbounds:      false,
+  bgcolor:        'rgba(0,0,0,0)',
+  showframe:      false,
+  showcoastlines: true,
+  coastlinecolor: '#94a3b8',
+  coastlinewidth: 0.6,
+  showland:       true,
+  landcolor:      '#EFF3F8',
+  showocean:      true,
+  oceancolor:     '#C7DFF7',
+  showlakes:      true,
+  lakecolor:      '#BAE6FD',
+  showcountries:  true,
+  countrycolor:   '#64748B',
+  countrywidth:   0.8,
+  showsubunits:   true,
+  subunitcolor:   '#CBD5E1',
+  subunitwidth:   0.5,
+  projection:     { type: 'orthographic', rotation: { lon: 82, lat: 22, roll: 0 } },
+} as const
 
-// Static panel spring for this page (no staggered delay needed)
-const panelSpring = makePanelSpring()
+// Empty choropleth for the selection ring when nothing is selected
+const EMPTY_SEL_TRACE = {
+  type:       'choropleth',
+  locations:  [] as string[],
+  z:          [] as number[],
+  colorscale: [[0, 'rgba(0,0,0,0)'], [1, 'rgba(0,0,0,0)']],
+  showscale:  false,
+  hoverinfo:  'skip',
+  marker:     { line: { color: '#F59E0B', width: 3 } },
+} as const
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -112,12 +132,39 @@ function matchCentroid(state: string): [number, number] | null {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface StateMetric {
-  ourState: string
-  geoName:  string | null
-  rev:      number
-  count:    number
-  topStore: StoreRecord | null
-  growth:   number | null
+  ourState:   string
+  geoName:    string | null
+  rev:        number
+  count:      number
+  topStore:   StoreRecord | null
+  growth:     number | null
+  earlyRev:   number
+  midRev:     number
+  recentRev:  number
+  totalPlans: number
+  catMix:     Partial<Record<StoreCategory, number>>
+}
+
+// ── Rich hover text builder ────────────────────────────────────────────────────
+function buildHoverText(m: StateMetric): string {
+  const catParts = [
+    m.catMix['Rising Star']     ? `Rising Stars: ${m.catMix['Rising Star']}`    : '',
+    m.catMix['New Bloomer']     ? `New Bloomers: ${m.catMix['New Bloomer']}`     : '',
+    m.catMix['Growing Store']   ? `Growing: ${m.catMix['Growing Store']}`        : '',
+    m.catMix['Constant Store']  ? `Constant: ${m.catMix['Constant Store']}`      : '',
+    m.catMix['Declining Store'] ? `Declining: ${m.catMix['Declining Store']}`    : '',
+    m.catMix['Fallen Star']     ? `Fallen Stars: ${m.catMix['Fallen Star']}`     : '',
+    m.catMix['Inactive Store']  ? `Inactive: ${m.catMix['Inactive Store']}`      : '',
+  ].filter(Boolean)
+
+  return (
+    `<b>${m.ourState}</b>`
+    + `<br>Stores: ${m.count}  ·  Growth: ${m.growth !== null ? fmtPct(m.growth) : 'N/A'}`
+    + `<br>Revenue: ${fmtInr(m.rev)}`
+    + (m.totalPlans > 0 ? `<br>Plans Sold: ${m.totalPlans.toLocaleString()}` : '')
+    + `<br><span style="color:#9CA3AF">Early: ${fmtInr(m.earlyRev)}  ·  Mid: ${fmtInr(m.midRev)}  ·  Recent: ${fmtInr(m.recentRev)}</span>`
+    + (catParts.length ? `<br><span style="color:#9CA3AF">${catParts.join('  ·  ')}</span>` : '')
+  )
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -165,143 +212,178 @@ export default function GeoAnalytics({ filters }: Props) {
     return { fs, fm, early, mid, recent }
   }, [stores, months, filters])
 
+  // ── Store classification for tooltip category mix ──────────────────────────
+  const stateCatMix = useMemo(() => {
+    const result = classifyAllStores(fs, fm)
+    const mix: Record<string, Partial<Record<StoreCategory, number>>> = {}
+    for (const m of result.metrics) {
+      const s = m.store.state ?? 'Unknown'
+      if (!mix[s]) mix[s] = {}
+      mix[s][m.category] = (mix[s][m.category] ?? 0) + 1
+    }
+    return mix
+  }, [fs, fm])
+
   // ── Per-state aggregations ─────────────────────────────────────────────────
   const stateMetrics = useMemo((): StateMetric[] => {
-    const map: Record<string, { rev: number; count: number; topStore: StoreRecord | null; growths: number[] }> = {}
+    const map: Record<string, {
+      rev: number; count: number; topStore: StoreRecord | null; growths: number[];
+      earlyRev: number; midRev: number; recentRev: number; totalPlans: number;
+    }> = {}
     for (const store of fs) {
       const s = store.state ?? 'Unknown'
-      if (!map[s]) map[s] = { rev: 0, count: 0, topStore: null, growths: [] }
+      if (!map[s]) map[s] = { rev: 0, count: 0, topStore: null, growths: [], earlyRev: 0, midRev: 0, recentRev: 0, totalPlans: 0 }
       const r = winRev(store, fm)
       map[s].rev += r; map[s].count++
       if (!map[s].topStore || r > winRev(map[s].topStore!, fm)) map[s].topStore = store
       const e = mAvg(store, early)
       if (e > 0 && early.length && recent.length)
         map[s].growths.push((mAvg(store, recent) - e) / e * 100)
+      map[s].earlyRev  += winRev(store, early)
+      map[s].midRev    += winRev(store, mid)
+      map[s].recentRev += winRev(store, recent)
+      const pc = store.monthly_plans_count ?? {}
+      map[s].totalPlans += fm.reduce((sum, mo) => sum + (pc[mo] ?? 0), 0)
     }
     return Object.entries(map).map(([ourState, d]) => ({
       ourState,
-      geoName: geoStateNames.length ? matchGeoName(ourState, geoStateNames) : ourState,
-      rev:     d.rev,
-      count:   d.count,
-      topStore: d.topStore,
-      growth:  d.growths.length ? d.growths.reduce((a, b) => a + b, 0) / d.growths.length : null,
+      geoName:    geoStateNames.length ? matchGeoName(ourState, geoStateNames) : ourState,
+      rev:        d.rev,
+      count:      d.count,
+      topStore:   d.topStore,
+      growth:     d.growths.length ? d.growths.reduce((a, b) => a + b, 0) / d.growths.length : null,
+      earlyRev:   d.earlyRev,
+      midRev:     d.midRev,
+      recentRev:  d.recentRev,
+      totalPlans: d.totalPlans,
+      catMix:     stateCatMix[ourState] ?? {},
     }))
-  }, [fs, fm, early, recent, geoStateNames])
+  }, [fs, fm, early, mid, recent, geoStateNames, stateCatMix])
 
-  // ── Plotly traces ──────────────────────────────────────────────────────────
-  const traces = useMemo(() => {
-    if (!geojson) return []
+  // ── Base traces — stable; does NOT depend on selectedState ────────────────
+  // This memo only invalidates on data/filter changes, not on state clicks.
+  // Keeps the expensive choropleth and bubble traces stable between selections.
+  const baseTraces = useMemo((): any[] | null => {
+    if (!geojson) return null
 
     const matched         = stateMetrics.filter(m => m.geoName !== null)
     const matchedGeoNames = matched.map(m => m.geoName as string)
     const unmatched       = geoStateNames.filter(n => !matchedGeoNames.includes(n))
 
-    const out: any[] = []
-
-    // 1. Background: states with no data → light neutral
-    if (unmatched.length > 0) {
-      out.push({
-        type:         'choropleth',
-        geojson,
-        featureidkey,
-        locations:    unmatched,
-        z:            unmatched.map(() => 0),
-        colorscale:   [[0, '#e2e8f0'], [1, '#e2e8f0']],
-        showscale:    false,
-        hovertemplate: '<b>%{location}</b><br>No stores in scope<extra></extra>',
-        marker:       { line: { color: '#ffffff', width: 0.8 } },
-      })
+    const bgTrace = {
+      type:         'choropleth',
+      geojson,
+      featureidkey,
+      locations:    unmatched,
+      z:            unmatched.map(() => 0),
+      colorscale:   [[0, '#E9EEF4'], [1, '#E9EEF4']],
+      showscale:    false,
+      hovertemplate: '<b>%{location}</b><br><span style="color:#9CA3AF">No stores in scope</span><extra></extra>',
+      marker:       { line: { color: '#ffffff', width: 1 } },
     }
 
-    // 2. Choropleth: growth % — diverging green-red scale
-    if (matched.length > 0) {
-      out.push({
-        type:         'choropleth',
-        geojson,
-        featureidkey,
-        locations:    matched.map(m => m.geoName),
-        z:            matched.map(m => m.growth ?? 0),
-        zmin:  -40, zmax: 40,
-        text:  matched.map(m => {
-          const top = m.topStore?.store_name ?? m.topStore?.store_id ?? 'N/A'
-          return `<b>${m.ourState}</b>`
-            + `<br>Growth: ${m.growth !== null ? fmtPct(m.growth) : 'N/A'}`
-            + `<br>Revenue: ${fmtInr(m.rev)}`
-            + `<br>Stores: ${m.count}`
-            + `<br>Top Store: ${top}`
-        }),
-        hovertemplate: '%{text}<extra></extra>',
-        colorscale:    GROWTH_CS,
-        autocolorscale: false,
-        colorbar: {
-          title:     { text: 'Growth %', font: { color: '#6b7280', size: 11 } },
-          thickness: 14,
-          len:       0.65,
-          bgcolor:   'rgba(0,0,0,0)',
-          tickfont:  { color: '#6b7280', size: 10 },
-          ticksuffix: '%',
-          tickvals:  [-40, -20, 0, 20, 40],
-        },
-        marker: { line: { color: '#ffffff', width: 0.8 } },
-      })
+    const choroTrace = {
+      type:         'choropleth',
+      geojson,
+      featureidkey,
+      locations:    matched.map(m => m.geoName),
+      z:            matched.map(m => m.growth ?? 0),
+      zmin:  -40, zmax: 40,
+      text:         matched.map(m => buildHoverText(m)),
+      hovertemplate: '%{text}<extra></extra>',
+      colorscale:    GROWTH_CS,
+      autocolorscale: false,
+      colorbar: {
+        title:     { text: 'Growth %', font: { color: '#6b7280', size: 11 } },
+        thickness: 12,
+        len:       0.6,
+        bgcolor:   'rgba(0,0,0,0)',
+        tickfont:  { color: '#6b7280', size: 10 },
+        tickvals:  [-40, -20, 0, 20, 40],
+        ticktext:  ['−40%', '−20%', '0%', '+20%', '+40%'],
+      },
+      marker: { line: { color: 'rgba(255,255,255,0.8)', width: 1 } },
     }
 
-    // 3. Selected-state amber ring
-    if (selectedState) {
-      const sel = matched.find(m => m.ourState === selectedState)
-      if (sel) {
-        out.push({
-          type:       'choropleth',
-          geojson,
-          featureidkey,
-          locations:  [sel.geoName],
-          z:          [1],
-          colorscale: [[0, 'rgba(0,0,0,0)'], [1, 'rgba(0,0,0,0)']],
-          showscale:  false,
-          hoverinfo:  'skip',
-          marker:     { line: { color: '#f59e0b', width: 3 } },
-        })
-      }
-    }
-
-    // 4. Bubbles: scattergeo sized by store count, colored by growth %
     const bubbles = matched
       .map(m => ({ ...m, centroid: matchCentroid(m.ourState) }))
       .filter(m => m.centroid !== null)
 
-    if (bubbles.length > 0) {
-      const maxCount = Math.max(...bubbles.map(b => b.count), 1)
-      out.push({
-        type: 'scattergeo',
-        lat:  bubbles.map(b => b.centroid![0]),
-        lon:  bubbles.map(b => b.centroid![1]),
-        mode: 'markers',
-        text: bubbles.map(b =>
-          `<b>${b.ourState}</b>`
-          + `<br>Stores: ${b.count}`
-          + `<br>Growth: ${b.growth !== null ? fmtPct(b.growth) : 'N/A'}`
-        ),
-        hovertemplate: '%{text}<extra></extra>',
-        showlegend: false,
-        marker: {
-          size:      bubbles.map(b => Math.max(8, (b.count / maxCount) * 44)),
-          color:     bubbles.map(b => b.growth ?? 0),
-          colorscale: GROWTH_CS,
-          cmin: -40, cmax: 40,
-          opacity:   0.55,
-          line:      { width: 1.5, color: 'rgba(255,255,255,0.9)' },
-          showscale: false,
-        },
-      })
+    const maxCount = bubbles.length > 0 ? Math.max(...bubbles.map(b => b.count), 1) : 1
+    const sz = (n: number) => Math.max(8, Math.sqrt(n / maxCount) * 46)
+
+    const glowTrace = {
+      type: 'scattergeo',
+      lat:  bubbles.map(b => b.centroid![0]),
+      lon:  bubbles.map(b => b.centroid![1]),
+      mode: 'markers',
+      hoverinfo: 'skip',
+      showlegend: false,
+      marker: {
+        size:       bubbles.map(b => sz(b.count) * 1.5),
+        color:      bubbles.map(b => b.growth ?? 0),
+        colorscale: GROWTH_CS,
+        cmin: -40, cmax: 40,
+        opacity:    0.18,
+        line:       { width: 0 },
+        showscale:  false,
+      },
     }
 
-    return out
-  }, [geojson, featureidkey, stateMetrics, geoStateNames, selectedState])
+    const bubbleTrace = {
+      type: 'scattergeo',
+      lat:  bubbles.map(b => b.centroid![0]),
+      lon:  bubbles.map(b => b.centroid![1]),
+      mode: 'markers',
+      text: bubbles.map(b => buildHoverText(b)),
+      hovertemplate: '%{text}<extra></extra>',
+      showlegend: false,
+      marker: {
+        size:       bubbles.map(b => sz(b.count)),
+        color:      bubbles.map(b => b.growth ?? 0),
+        colorscale: GROWTH_CS,
+        cmin: -40, cmax: 40,
+        opacity:    0.65,
+        line:       { width: 1.5, color: 'rgba(255,255,255,0.95)' },
+        showscale:  false,
+      },
+    }
+
+    return [bgTrace, choroTrace, glowTrace, bubbleTrace]
+  }, [geojson, featureidkey, stateMetrics, geoStateNames])
+
+  // ── Selection ring — cheap; only this trace updates on click ──────────────
+  const selectionTrace = useMemo((): any => {
+    const base = {
+      ...EMPTY_SEL_TRACE,
+      geojson,
+      featureidkey,
+    }
+    if (!selectedState || !geojson) return base
+    const sel = stateMetrics.filter(m => m.geoName !== null).find(m => m.ourState === selectedState)
+    if (!sel) return base
+    return { ...base, locations: [sel.geoName as string], z: [1] }
+  }, [geojson, featureidkey, stateMetrics, selectedState])
+
+  // ── Final trace array: [bg, choro, selectionRing, glow, bubbles] ──────────
+  // Order is fixed so Plotly can diff by index; only selectionTrace changes on click.
+  const allTraces = useMemo((): any[] => {
+    if (!baseTraces) return []
+    const [bg, choro, glow, bubbles] = baseTraces
+    return [bg, choro, selectionTrace, glow, bubbles]
+  }, [baseTraces, selectionTrace])
+
+  const hasData = allTraces.length > 0 && (
+    (allTraces[1]?.locations?.length ?? 0) > 0 ||
+    (allTraces[0]?.locations?.length ?? 0) > 0
+  )
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <motion.div
-      {...panelSpring}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.12, ease: 'easeOut' }}
       className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden"
     >
       {/* Header */}
@@ -309,16 +391,16 @@ export default function GeoAnalytics({ filters }: Props) {
         <div>
           <h2 className="text-sm font-bold text-gray-900">Growth Heat Map — India</h2>
           <p className="text-[11px] text-gray-500 mt-0.5 leading-relaxed max-w-lg">
-            States shaded by early→recent growth — <span className="text-emerald-600">green</span> = gaining momentum,
-            <span className="text-red-500"> red</span> = losing ground.
+            States shaded by early→recent revenue growth momentum.
             {mid.length > 0 ? ` Mid phase: ${mid[0]}${mid.length > 1 ? `–${mid[mid.length - 1]}` : ''}. ` : ' '}
             Bubble size = store count. Click a state to inspect its stores.
           </p>
         </div>
         {selectedState && (
           <motion.button
-            initial={{ opacity: 0, scale: 0.85 }}
+            initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.1 }}
             onClick={() => setSelectedState(null)}
             className="shrink-0 text-xs text-blue-600 hover:text-blue-500 transition-colors px-2.5 py-1 rounded-full border border-blue-200 bg-blue-50 font-medium"
           >
@@ -331,61 +413,46 @@ export default function GeoAnalytics({ filters }: Props) {
       <div className="px-5 py-2 bg-gray-50 border-b border-gray-100 flex items-center gap-1.5">
         <span className="h-2 w-2 rounded-sm bg-blue-400/60 shrink-0" />
         <p className="text-[10.5px] text-blue-700/80">
-          Hover a state for its full journey profile · all states shaded by growth %, bubbles sized by store count
+          Hover a state for revenue phase breakdown and store mix · click to drill into state stores
         </p>
       </div>
 
       {/* Map */}
       <div className="px-2">
         {geoLoading && (
-          <div className="flex items-center justify-center h-[520px] gap-3 text-gray-400 text-sm">
+          <div className="flex items-center justify-center h-[560px] gap-3 text-gray-400 text-sm">
             <div className="h-5 w-5 rounded-full border-2 border-gray-200 border-t-blue-500 animate-spin" />
             Loading India map…
           </div>
         )}
         {geoError && (
-          <div className="flex items-center justify-center h-[520px] text-red-500 text-sm">
+          <div className="flex items-center justify-center h-[560px] text-red-500 text-sm">
             {geoError} — check your network connection.
           </div>
         )}
-        {!geoLoading && !geoError && traces.length === 0 && (
-          <div className="flex items-center justify-center h-[520px] text-gray-400 text-sm">
+        {!geoLoading && !geoError && !hasData && (
+          <div className="flex items-center justify-center h-[560px] text-gray-400 text-sm">
             No data matches the selected filters.
           </div>
         )}
-        {!geoLoading && !geoError && traces.length > 0 && (
+        {!geoLoading && !geoError && hasData && (
           <Plot
-            data={traces}
+            data={allTraces}
             layout={{
               paper_bgcolor: 'rgba(0,0,0,0)',
               plot_bgcolor:  'rgba(0,0,0,0)',
               font: { color: '#6b7280', family: 'Inter, sans-serif', size: 11 },
-              geo: {
-                fitbounds:      false,
-                lataxis:        { range: [6, 38] },
-                lonaxis:        { range: [67, 98] },
-                bgcolor:        '#f0f9ff',
-                showframe:      false,
-                showcoastlines: true,
-                coastlinecolor: '#94a3b8',
-                coastlinewidth: 0.8,
-                showland:       true,
-                landcolor:      '#f8fafc',
-                showocean:      true,
-                oceancolor:     '#dbeafe',
-                showlakes:      true,
-                lakecolor:      '#dbeafe',
-                showcountries:  true,
-                countrycolor:   '#94a3b8',
-                countrywidth:   1,
-                showsubunits:   true,
-                subunitcolor:   '#cbd5e1',
-                projection:     { type: 'mercator' },
-              },
-              margin: { l: 0, r: 0, t: 0, b: 0 },
-              height: 520,
+              // uirevision keeps zoom/rotation intact across filter-driven re-renders
+              uirevision:    'geo-stable',
+              geo:           GEO_LAYOUT,
+              margin:        { l: 0, r: 0, t: 0, b: 0 },
+              height:        560,
             } as any}
-            config={{ displayModeBar: false, responsive: true }}
+            config={{
+              displayModeBar: false,
+              responsive:     true,
+              scrollZoom:     true,
+            }}
             style={{ width: '100%' }}
             onClick={(evt: any) => {
               const pt = evt?.points?.[0]
@@ -397,21 +464,33 @@ export default function GeoAnalytics({ filters }: Props) {
         )}
       </div>
 
-      {/* Legend */}
-      <div className="px-5 py-3 border-t border-gray-100 flex flex-wrap items-center gap-x-5 gap-y-2">
-        {LEGEND_CATS.map(cat => (
-          <span key={cat.label} className="flex items-center gap-1.5 text-[11px] text-gray-600">
-            <span
-              className="h-3 w-3 rounded-sm shrink-0"
-              style={{ backgroundColor: cat.color }}
-            />
-            {cat.label}
-          </span>
-        ))}
-        <span className="flex items-center gap-1.5 text-[11px] text-gray-400 ml-2">
-          <span className="h-3 w-3 rounded-full border border-gray-400 shrink-0" />
-          Bubble size = store count · colour = direction
-        </span>
+      {/* Gradient legend bar */}
+      <div className="px-5 py-3.5 border-t border-gray-100">
+        <div className="flex items-center justify-between text-[10px] font-medium text-gray-500 mb-1.5">
+          <span>Strong Decline</span>
+          <span>Decline</span>
+          <span>Stable</span>
+          <span>Growth</span>
+          <span>Strong Growth</span>
+        </div>
+        <div
+          className="h-2.5 rounded-full w-full"
+          style={{
+            background: 'linear-gradient(to right, #8B1E3F, #D97757, #E5E7EB, #7CC576, #145A32)',
+            boxShadow:  '0 1px 3px rgba(0,0,0,0.08)',
+          }}
+        />
+        <div className="flex justify-between text-[10px] text-gray-400 mt-1.5">
+          <span>−40%</span>
+          <span>−20%</span>
+          <span>0%</span>
+          <span>+20%</span>
+          <span>+40%</span>
+        </div>
+        <div className="mt-2 flex items-center gap-1.5 text-[10px] text-gray-400">
+          <span className="h-3 w-3 rounded-full border border-gray-300 bg-gray-200/60 shrink-0" />
+          Bubble size = store count · colour = growth direction
+        </div>
       </div>
     </motion.div>
   )
