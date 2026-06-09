@@ -8,7 +8,7 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreMetrics, StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
-import { fmtInr, fmtPct } from '@/lib/formatting'
+import { fmtInr, fmtPct, fmtStore } from '@/lib/formatting'
 import { CATEGORY_TEXT_COLOR } from '@/lib/categoryStyles'
 
 const Plot = createPlotlyComponent(Plotly)
@@ -23,18 +23,20 @@ const POSITIVE_CATEGORIES: StoreCategory[] = ['Rising Star']
 // ── Table columns ─────────────────────────────────────────────────────────────
 
 const TABLE_COLS: { key: SortKey | null; label: string; align: 'left' | 'right' | 'center' }[] = [
-  { key: null,         label: 'Store',        align: 'left'   },
-  { key: 'state',      label: 'State',        align: 'left'   },
-  { key: null,         label: 'Category',     align: 'left'   },
-  { key: 'earlyRev',  label: 'Early Rev',    align: 'right'  },
-  { key: 'recentRev', label: 'Recent Rev',   align: 'right'  },
-  { key: 'growth',     label: 'Growth %',     align: 'right'  },
-  { key: null,         label: 'Early Plans',  align: 'right'  },
-  { key: null,         label: 'Mid Plans',    align: 'right'  },
-  { key: null,         label: 'Recent Plans', align: 'right'  },
-  { key: 'earlyRank', label: 'Early Rank',   align: 'center' },
-  { key: 'recentRank',label: 'Recent Rank',  align: 'center' },
-  { key: 'health',     label: 'Health %',    align: 'right'  },
+  { key: null,          label: '#',            align: 'center' },
+  { key: null,          label: 'Store',        align: 'left'   },
+  { key: 'state',       label: 'State',        align: 'left'   },
+  { key: null,          label: 'Category',     align: 'left'   },
+  { key: 'earlyRev',   label: 'Early Rev',    align: 'right'  },
+  { key: 'recentRev',  label: 'Recent Rev',   align: 'right'  },
+  { key: 'growth',      label: 'Growth %',     align: 'right'  },
+  { key: null,          label: 'Early Plans',  align: 'right'  },
+  { key: null,          label: 'Mid Plans',    align: 'right'  },
+  { key: null,          label: 'Recent Plans', align: 'right'  },
+  { key: 'earlyRank',  label: 'Early Rank',   align: 'center' },
+  { key: 'recentRank', label: 'Recent Rank',  align: 'center' },
+  { key: 'health',      label: 'Health',       align: 'right'  },
+  { key: null,          label: 'Bar',          align: 'left'   },
 ]
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -55,6 +57,7 @@ export default function RisingStars({
   // ── Filter engine results ─────────────────────────────────────────────────
 
   const { rows, kpi, top15 } = useMemo(() => {
+    try {
     let scope = classification.metrics
 
     // Apply store-level filters
@@ -113,6 +116,10 @@ export default function RisingStars({
       kpi: { count: enriched.length, growingCount, topRiser, medianGrowth, networkSharePct },
       top15,
     }
+    } catch (e) {
+      console.error('[RisingStars] computation error:', e)
+      return { rows: [], kpi: { count: 0, growingCount: 0, topRiser: null, medianGrowth: 0, networkSharePct: 0 }, top15: [] }
+    }
   }, [classification, filters])
 
   // ── Sort ─────────────────────────────────────────────────────────────────────
@@ -147,14 +154,15 @@ export default function RisingStars({
     const rc = recentMonths.length || 1
 
     const ordered = [...top15].sort((a, b) => a.recentTotal / rc - b.recentTotal / rc)
-    const chartCategories = ordered.map(r => r.store.store_id)
+    const storeLabel = (r: typeof ordered[0]) => fmtStore(r.store)
+    const chartCategories = ordered.map(r => fmtStore(r.store))
 
     // Connector line spanning early avg → recent avg (mid dot sits on this line)
     const lines = ordered.map(row => ({
       type: 'scatter' as const,
       mode: 'lines' as const,
       x: [row.earlyTotal / ec, row.recentTotal / rc],
-      y: [row.store.store_id, row.store.store_id],
+      y: [storeLabel(row), storeLabel(row)],
       showlegend: false,
       line:  { color: '#d1d5db', width: 2 },
       hoverinfo: 'none' as const,
@@ -165,9 +173,9 @@ export default function RisingStars({
       mode: 'markers' as const,
       name: 'Early',
       x:    ordered.map(r => r.earlyTotal / ec),
-      y:    ordered.map(r => r.store.store_id),
+      y:    ordered.map(r => storeLabel(r)),
       marker: { symbol: 'circle', size: 10, color: '#9ca3af' },
-      hovertemplate: '<b>%{y}</b><br>Early: ₹%{x:,.0f}<extra></extra>',
+      hovertemplate: '<b>%{y}</b><br>Early avg: ₹%{x:,.0f}<extra></extra>',
     }
 
     const midTrace = {
@@ -175,9 +183,9 @@ export default function RisingStars({
       mode: 'markers' as const,
       name: 'Mid',
       x:    ordered.map(r => r.midTotal / mc),
-      y:    ordered.map(r => r.store.store_id),
+      y:    ordered.map(r => storeLabel(r)),
       marker: { symbol: 'diamond', size: 9, color: '#8b5cf6' },
-      hovertemplate: '<b>%{y}</b><br>Mid: ₹%{x:,.0f}<extra></extra>',
+      hovertemplate: '<b>%{y}</b><br>Mid avg: ₹%{x:,.0f}<extra></extra>',
     }
 
     const recentTrace = {
@@ -185,9 +193,9 @@ export default function RisingStars({
       mode: 'markers' as const,
       name: 'Recent',
       x:    ordered.map(r => r.recentTotal / rc),
-      y:    ordered.map(r => r.store.store_id),
+      y:    ordered.map(r => storeLabel(r)),
       marker: { symbol: 'circle', size: 10, color: '#3b82f6' },
-      hovertemplate: '<b>%{y}</b><br>Recent: ₹%{x:,.0f}<extra></extra>',
+      hovertemplate: '<b>%{y}</b><br>Recent avg: ₹%{x:,.0f}<extra></extra>',
     }
 
     return { chartTraces: [...lines, earlyTrace, midTrace, recentTrace], chartCategories }
@@ -202,8 +210,13 @@ export default function RisingStars({
 
   if (!rows.length) {
     return (
-      <div className="flex items-center justify-center h-64 text-gray-500">
-        No rising stores found in the selected filters.
+      <div className="rounded-xl border border-gray-200 bg-white min-h-[320px] flex flex-col items-center justify-center gap-3 p-8 text-center">
+        <TrendingUp className="h-8 w-8 text-gray-300" />
+        <p className="text-base font-semibold text-gray-700">No Rising Stars in Scope</p>
+        <p className="text-sm text-gray-400 max-w-sm">
+          No stores meet the Rising Star criteria{filters.state ? ` in ${filters.state}` : ''}{filters.category ? ` for ${filters.category}` : ''}.
+          Rising Stars require strict phase-over-phase growth (Early → Mid → Recent) with ≥ 30% total growth.
+        </p>
       </div>
     )
   }
@@ -214,15 +227,18 @@ export default function RisingStars({
     <div className="space-y-6">
 
       {/* Page Header */}
-      <div>
+      <div className="pb-1 border-b border-gray-100">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">Momentum &amp; Movement</span>
+        </div>
         <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-          <TrendingUp className="w-5 h-5 text-emerald-500" />
-          Stores Gaining Momentum
+          <TrendingUp className="w-5 h-5 text-emerald-500 shrink-0" />
+          Which stores are consistently growing?
         </h2>
-        <p className="text-sm text-gray-500 mt-1">
-          {rows.length} Rising Star stores — stores with strict phase-over-phase growth (Early &lt; Mid &lt; Recent)
-          in both Revenue and Plans Sold, achieving ≥ 30% growth and above-network-median recent activity.
-          These are the network's bright spots worth nurturing.
+        <p className="text-sm text-gray-500 mt-1 max-w-2xl">
+          {rows.length} Rising Star store{rows.length !== 1 ? 's' : ''}{filters.state ? ` in ${filters.state}` : ''} — strict phase-over-phase growth
+          (Early → Mid → Recent) with ≥ 30% total increase and above-network-median recent revenue.
+          These are the bright spots to protect, learn from, and scale.
         </p>
       </div>
 
@@ -247,12 +263,17 @@ export default function RisingStars({
 
         <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
           <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Top Riser</p>
-          <p className="text-2xl font-bold text-gray-900 truncate">
-            {kpi.topRiser?.store.store_name ?? kpi.topRiser?.store.store_id ?? '—'}
-          </p>
-          <p className="text-xs text-emerald-600 mt-1">
-            {kpi.topRiser?.growthPct != null ? `${fmtPct(kpi.topRiser.growthPct)} growth` : '—'}
-          </p>
+          {kpi.topRiser ? (
+            <>
+              <p className="text-sm font-bold text-gray-900 truncate">{kpi.topRiser.store.store_name ?? kpi.topRiser.store.store_id}</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">{kpi.topRiser.store.store_id}</p>
+              <p className="text-xl font-bold text-emerald-600 mt-1 tabular-nums">
+                {kpi.topRiser.growthPct != null ? `${fmtPct(kpi.topRiser.growthPct)} growth` : '—'}
+              </p>
+            </>
+          ) : (
+            <p className="text-2xl font-bold text-gray-900">—</p>
+          )}
         </div>
 
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
@@ -347,54 +368,70 @@ export default function RisingStars({
               </tr>
             </thead>
             <tbody>
-              {sorted.map((row, i) => (
-                <tr
-                  key={row.store.store_id}
-                  onClick={() => onNavigateToStore?.(row.store.store_id)}
-                  className={cn(
-                    'border-b border-gray-100 transition-colors',
-                    i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50',
-                    onNavigateToStore ? 'cursor-pointer hover:bg-emerald-50/40' : 'hover:bg-gray-50',
-                  )}
-                >
-                  <td className="px-4 py-2.5 font-semibold text-gray-800 whitespace-nowrap">
-                    {row.store.store_name ?? row.store.store_id}
-                  </td>
-                  <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">
-                    {row.store.state ?? '—'}
-                  </td>
-                  <td className={cn('px-4 py-2.5 text-[11px] font-semibold', CATEGORY_TEXT_COLOR[row.category])}>
-                    {row.category}
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-gray-400 tabular-nums">
-                    {fmtInr(row.earlyTotal)}
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-gray-700 font-medium tabular-nums">
-                    {fmtInr(row.recentTotal)}
-                  </td>
-                  <td className="px-4 py-2.5 text-right font-semibold text-emerald-600 tabular-nums">
-                    {row.growthPct != null ? fmtPct(row.growthPct) : '—'}
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-gray-400 tabular-nums">
-                    {row.earlyPlans.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-violet-500 tabular-nums">
-                    {row.midPlans.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-gray-700 font-medium tabular-nums">
-                    {row.recentPlans.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-2.5 text-center text-gray-400 tabular-nums">
-                    {row.earlyRank}
-                  </td>
-                  <td className="px-4 py-2.5 text-center text-gray-600 tabular-nums">
-                    {row.recentRank}
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-gray-600 tabular-nums">
-                    {row.localHealth.toFixed(1)}
-                  </td>
-                </tr>
-              ))}
+              {(() => {
+                const maxGrowth = Math.max(...sorted.map(r => r.growthPct ?? 0), 1)
+                return sorted.map((row, i) => {
+                  const barW = ((row.growthPct ?? 0) / maxGrowth) * 100
+                  return (
+                    <tr
+                      key={row.store.store_id}
+                      onClick={() => onNavigateToStore?.(row.store.store_id)}
+                      className={cn(
+                        'border-b border-gray-100 transition-colors',
+                        i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50',
+                        onNavigateToStore ? 'cursor-pointer hover:bg-emerald-50/30' : 'hover:bg-gray-50',
+                      )}
+                    >
+                      <td className="px-3 py-2.5 text-center text-gray-400 text-xs">{i + 1}</td>
+                      <td className="px-3 py-2.5">
+                        <div className="font-semibold text-gray-800 truncate max-w-[160px]">{row.store.store_name ?? row.store.store_id}</div>
+                        <div className="text-[10px] text-gray-400 font-mono mt-0.5">{row.store.store_id}</div>
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap text-xs">
+                        {row.store.state ?? '—'}
+                      </td>
+                      <td className={cn('px-3 py-2.5 text-[11px] font-semibold whitespace-nowrap', CATEGORY_TEXT_COLOR[row.category])}>
+                        {row.category}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-gray-400 tabular-nums text-xs">
+                        {fmtInr(row.earlyTotal)}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-gray-700 font-medium tabular-nums text-xs">
+                        {fmtInr(row.recentTotal)}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-semibold text-emerald-600 tabular-nums text-xs">
+                        {row.growthPct != null ? fmtPct(row.growthPct) : '—'}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-gray-400 tabular-nums text-xs">
+                        {row.earlyPlans.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-violet-500 tabular-nums text-xs">
+                        {row.midPlans.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-gray-700 font-medium tabular-nums text-xs">
+                        {row.recentPlans.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2.5 text-center text-gray-400 tabular-nums text-xs">
+                        {row.earlyRank}
+                      </td>
+                      <td className="px-3 py-2.5 text-center text-gray-600 tabular-nums text-xs">
+                        {row.recentRank}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-gray-600 tabular-nums text-xs">
+                        {row.localHealth.toFixed(1)}%
+                      </td>
+                      <td className="px-3 py-2.5 w-24 hidden lg:table-cell">
+                        <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-emerald-500"
+                            style={{ width: `${Math.min(barW, 100)}%` }}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })
+              })()}
             </tbody>
           </table>
         </div>

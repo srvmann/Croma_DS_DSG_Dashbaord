@@ -7,7 +7,7 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import { cn } from '@/lib/utils'
 import { allocatePhases } from '@/lib/classificationEngine'
-import { fmtInr, fmtPct } from '@/lib/formatting'
+import { fmtInr, fmtInrFull, fmtPct } from '@/lib/formatting'
 import { panelSpring } from '@/lib/animations'
 import { PT, PT_AXIS } from '@/lib/plotlyTheme'
 
@@ -35,18 +35,6 @@ function pctile(sorted: number[], p: number): number {
   return lo === hi ? sorted[lo] : sorted[lo] + (idx - lo) * (sorted[hi] - sorted[lo])
 }
 
-/** Format a number using Indian comma notation (e.g. ₹2,98,450) */
-function fmtIndian(n: number): string {
-  const abs = Math.round(Math.abs(n))
-  const sign = n < 0 ? '-' : ''
-  const s = abs.toString()
-  if (s.length <= 3) return `${sign}₹${s}`
-  const last3 = s.slice(-3)
-  const rest = s.slice(0, -3)
-  const groups: string[] = []
-  for (let i = rest.length; i > 0; i -= 2) groups.unshift(rest.slice(Math.max(0, i - 2), i))
-  return `${sign}₹${groups.join(',')},${last3}`
-}
 
 interface MonthStats {
   n: number; q1: number; median: number; q3: number; mean: number
@@ -86,14 +74,14 @@ function buildBoxHover(month: string, stats: MonthStats | null): string {
     `<b>Store Coverage</b>`,
     `Total Stores: <b>${stats.n}</b>`,
     `<b>Distribution Statistics</b>`,
-    `Min Revenue:    <b>${fmtIndian(stats.minR)}</b>`,
-    `Q1 (25th pct):  <b>${fmtIndian(stats.q1)}</b>`,
-    `Median Revenue: <b>${fmtIndian(stats.median)}</b>`,
-    `Mean Revenue:   <b>${fmtIndian(stats.mean)}</b>`,
-    `Q3 (75th pct):  <b>${fmtIndian(stats.q3)}</b>`,
-    `Max Revenue:    <b>${fmtIndian(stats.maxR)}</b>`,
+    `Min Revenue:    <b>${fmtInrFull(stats.minR)}</b>`,
+    `Q1 (25th pct):  <b>${fmtInrFull(stats.q1)}</b>`,
+    `Median Revenue: <b>${fmtInrFull(stats.median)}</b>`,
+    `Mean Revenue:   <b>${fmtInrFull(stats.mean)}</b>`,
+    `Q3 (75th pct):  <b>${fmtInrFull(stats.q3)}</b>`,
+    `Max Revenue:    <b>${fmtInrFull(stats.maxR)}</b>`,
     `<b>Spread</b>`,
-    `IQR: <b>${fmtIndian(stats.iqr)}</b>`,
+    `IQR: <b>${fmtInrFull(stats.iqr)}</b>`,
     outlierLine,
     `<i>${skew}${wideIqr}</i>`,
   ].join('<br>') + '<extra></extra>'
@@ -226,7 +214,7 @@ export default function MonthlyRevenue({ filters }: Props) {
       title: { text: 'Store Revenue' },
       tickmode: 'array' as const,
       tickvals,
-      ticktext: tickvals.map(fmtIndian),
+      ticktext: tickvals.map(fmtInrFull),
     }
   }, [fs, fm])
 

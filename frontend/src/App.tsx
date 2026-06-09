@@ -32,21 +32,24 @@ import type { StoreCategory } from './lib/classificationEngine'
 
 // ── Tab registry ──────────────────────────────────────────────────────────────
 
-// Tab order tells a deliberate story:
-//  1 → Big picture  2 → Trend  3 → Store positions  4-6 → Winners / losers / movers
-//  7-8 → Geography  9 → Drill-down  10 → Current-month target
+// Narrative order — each section answers a business question:
+//  1-2  Business Snapshot:    "What is happening overall?"
+//  3-5  Performance Breakdown: "Where is performance coming from?"
+//  6-8  Momentum & Risk:      "What is changing, and where should we act?"
+//  9    Deep Dive:            "Why is this happening?"
+//  10   Actionable:           "What should we do next?"
 const TABS = [
-  { id: 'executive',       label: 'Overview'         },
-  { id: 'monthly-revenue', label: 'Revenue Trend'    },
-  { id: 'store-journey',   label: 'Store Journeys'   },
-  { id: 'rising-stars',    label: 'Rising Stores'    },
-  { id: 'fallen-stars',    label: 'Fallen Stores'    },
-  { id: 'revenue-movers',  label: 'Top Movers'       },
-  { id: 'state-journey',   label: 'State Health'     },
-  { id: 'geo',             label: 'Geo Map'          },
-  { id: 'store-deep-dive', label: 'Store Spotlight'  },
-  { id: 'target-command',  label: 'Target Tracker'   },
-  { id: 'platform-docs',  label: 'Platform Docs'    },
+  { id: 'executive',       label: 'Overview'        },
+  { id: 'monthly-revenue', label: 'Revenue Trend'   },
+  { id: 'store-journey',   label: 'Store Journeys'  },
+  { id: 'state-journey',   label: 'State Health'    },
+  { id: 'geo',             label: 'Geo Map'         },
+  { id: 'revenue-movers',  label: 'Top Movers'      },
+  { id: 'rising-stars',    label: 'Rising Stores'   },
+  { id: 'fallen-stars',    label: 'Fallen Stores'   },
+  { id: 'store-deep-dive', label: 'Store Spotlight' },
+  { id: 'target-command',  label: 'Target Tracker'  },
+  { id: 'platform-docs',   label: 'Platform Docs'   },
 ] as const
 
 type TabId = typeof TABS[number]['id']
@@ -226,7 +229,7 @@ function TabPlaceholder({ label, filters }: { label: string; filters: FilterStat
 // ── Main App ──────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const { isLoading, hasData, stores, months, states, categories, refetchData } =
+  const { isLoading, hasData, stores, months, states, categories, refetchData, error } =
     useDataContext()
 
   const [activeTab, setActiveTab]         = useState<TabId>('executive')
@@ -273,10 +276,49 @@ export default function App() {
 
   const currentTab = TABS.find(t => t.id === activeTab)!
 
+  function renderTab() {
+    switch (activeTab) {
+      case 'executive':       return <ExecutiveOverview filters={filters} />
+      case 'monthly-revenue': return <MonthlyRevenue filters={filters} />
+      case 'store-journey':   return <StoreJourneyMap filters={filters} onNavigateToStore={handleNavigateToStore} initialCategory={journeyPrefilter} />
+      case 'state-journey':   return <StateJourneyAnalysis filters={filters} />
+      case 'geo':             return <GeoAnalytics filters={filters} />
+      case 'revenue-movers':  return <RevenueMovers filters={filters} />
+      case 'rising-stars':    return <RisingStars filters={filters} onNavigateToStore={handleNavigateToStore} onNavigateToJourneyCategory={handleNavigateToJourneyCategory} />
+      case 'fallen-stars':    return <FallenStars filters={filters} onNavigateToStore={handleNavigateToStore} onNavigateToJourneyCategory={handleNavigateToJourneyCategory} />
+      case 'store-deep-dive': return <StoreDeepDive filters={filters} initialStoreId={deepDiveStoreId} />
+      case 'target-command':  return <TargetCommandCenter filters={filters} />
+      case 'platform-docs':   return <PlatformDocs />
+      default:                return <TabPlaceholder label={currentTab.label} filters={filters} />
+    }
+  }
+
   // ── Loading skeleton (initial server check + 400 ms min) ─────────────────
 
   if (isLoading || !skeletonDone) {
     return <AppSkeleton />
+  }
+
+  // ── Backend connection error ───────────────────────────────────────────────
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-8">
+        <div className="max-w-md w-full rounded-2xl border border-red-200 bg-white p-8 shadow-sm text-center space-y-4">
+          <div className="h-12 w-12 rounded-full bg-red-50 border border-red-100 flex items-center justify-center mx-auto">
+            <Database className="h-6 w-6 text-red-400" />
+          </div>
+          <h2 className="text-lg font-bold text-gray-900">Unable to Connect</h2>
+          <p className="text-sm text-gray-500">{error}</p>
+          <button
+            onClick={() => refetchData()}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
+          >
+            <RotateCcw className="h-4 w-4" /> Retry
+          </button>
+        </div>
+      </div>
+    )
   }
 
   // ── Upload / onboarding screen ────────────────────────────────────────────
@@ -387,30 +429,7 @@ export default function App() {
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.2, ease: 'easeOut' }}
           >
-            {activeTab === 'executive'
-              ? <ExecutiveOverview filters={filters} />
-              : activeTab === 'monthly-revenue'
-                ? <MonthlyRevenue filters={filters} />
-                : activeTab === 'store-journey'
-                  ? <StoreJourneyMap filters={filters} onNavigateToStore={handleNavigateToStore} initialCategory={journeyPrefilter} />
-                  : activeTab === 'state-journey'
-                    ? <StateJourneyAnalysis filters={filters} />
-                    : activeTab === 'geo'
-                      ? <GeoAnalytics filters={filters} />
-                    : activeTab === 'rising-stars'
-                      ? <RisingStars filters={filters} onNavigateToStore={handleNavigateToStore} onNavigateToJourneyCategory={handleNavigateToJourneyCategory} />
-                      : activeTab === 'fallen-stars'
-                        ? <FallenStars filters={filters} onNavigateToStore={handleNavigateToStore} onNavigateToJourneyCategory={handleNavigateToJourneyCategory} />
-                        : activeTab === 'revenue-movers'
-                          ? <RevenueMovers filters={filters} />
-                          : activeTab === 'store-deep-dive'
-                            ? <StoreDeepDive filters={filters} initialStoreId={deepDiveStoreId} />
-                            : activeTab === 'target-command'
-                              ? <TargetCommandCenter filters={filters} />
-                              : activeTab === 'platform-docs'
-                                ? <PlatformDocs />
-                                : <TabPlaceholder label={currentTab.label} filters={filters} />
-            }
+            {renderTab()}
           </motion.div>
         </AnimatePresence>
       </main>

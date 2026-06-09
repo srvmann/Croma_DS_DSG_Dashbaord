@@ -8,7 +8,7 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
-import { fmtInr, fmtPct } from '@/lib/formatting'
+import { fmtInr, fmtPct, fmtStore } from '@/lib/formatting'
 import { CATEGORY_TEXT_COLOR } from '@/lib/categoryStyles'
 
 const Plot = createPlotlyComponent(Plotly)
@@ -23,6 +23,7 @@ const NEGATIVE_CATEGORIES: StoreCategory[] = ['Fallen Star']
 // ── Table columns ─────────────────────────────────────────────────────────────
 
 const TABLE_COLS: { key: SortKey | null; label: string; align: 'left' | 'right' | 'center' }[] = [
+  { key: null,          label: '#',            align: 'center' },
   { key: null,          label: 'Store',        align: 'left'   },
   { key: 'state',       label: 'State',        align: 'left'   },
   { key: null,          label: 'Category',     align: 'left'   },
@@ -34,7 +35,8 @@ const TABLE_COLS: { key: SortKey | null; label: string; align: 'left' | 'right' 
   { key: null,          label: 'Recent Plans', align: 'right'  },
   { key: 'earlyRank',  label: 'Early Rank',   align: 'center' },
   { key: 'recentRank', label: 'Recent Rank',  align: 'center' },
-  { key: 'health',      label: 'Health %',    align: 'right'  },
+  { key: 'health',      label: 'Health',       align: 'right'  },
+  { key: null,          label: 'Bar',          align: 'left'   },
 ]
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -55,6 +57,7 @@ export default function FallenStars({
   // ── Filter engine results ─────────────────────────────────────────────────
 
   const { rows, kpi, top15 } = useMemo(() => {
+    try {
     let scope = classification.metrics
 
     // Apply store-level filters
@@ -113,6 +116,10 @@ export default function FallenStars({
       kpi: { count: enriched.length, decliningCount, worstFaller, medianDecline, revenueAtRiskPct },
       top15,
     }
+    } catch (e) {
+      console.error('[FallenStars] computation error:', e)
+      return { rows: [], kpi: { count: 0, decliningCount: 0, worstFaller: null, medianDecline: 0, revenueAtRiskPct: 0 }, top15: [] }
+    }
   }, [classification, filters])
 
   // ── Sort ─────────────────────────────────────────────────────────────────────
@@ -147,14 +154,15 @@ export default function FallenStars({
     const rc = recentMonths.length || 1
 
     const ordered = [...top15].sort((a, b) => a.earlyTotal / ec - b.earlyTotal / ec)
-    const chartCategories = ordered.map(r => r.store.store_id)
+    const storeLabel = (r: typeof ordered[0]) => fmtStore(r.store)
+    const chartCategories = ordered.map(r => fmtStore(r.store))
 
-    // Connector line spanning early avg → recent avg
+    // Connector line spanning recent avg → early avg
     const lines = ordered.map(row => ({
       type: 'scatter' as const,
       mode: 'lines' as const,
       x: [row.recentTotal / rc, row.earlyTotal / ec],
-      y: [row.store.store_id,   row.store.store_id],
+      y: [storeLabel(row),      storeLabel(row)],
       showlegend: false,
       line:  { color: '#fca5a5', width: 2 },
       hoverinfo: 'none' as const,
@@ -165,9 +173,9 @@ export default function FallenStars({
       mode: 'markers' as const,
       name: 'Recent',
       x:    ordered.map(r => r.recentTotal / rc),
-      y:    ordered.map(r => r.store.store_id),
+      y:    ordered.map(r => storeLabel(r)),
       marker: { symbol: 'circle', size: 10, color: '#ef4444' },
-      hovertemplate: '<b>%{y}</b><br>Recent: ₹%{x:,.0f}<extra></extra>',
+      hovertemplate: '<b>%{y}</b><br>Recent avg: ₹%{x:,.0f}<extra></extra>',
     }
 
     const midTrace = {
@@ -175,9 +183,9 @@ export default function FallenStars({
       mode: 'markers' as const,
       name: 'Mid',
       x:    ordered.map(r => r.midTotal / mc),
-      y:    ordered.map(r => r.store.store_id),
+      y:    ordered.map(r => storeLabel(r)),
       marker: { symbol: 'diamond', size: 9, color: '#8b5cf6' },
-      hovertemplate: '<b>%{y}</b><br>Mid: ₹%{x:,.0f}<extra></extra>',
+      hovertemplate: '<b>%{y}</b><br>Mid avg: ₹%{x:,.0f}<extra></extra>',
     }
 
     const earlyTrace = {
@@ -185,9 +193,9 @@ export default function FallenStars({
       mode: 'markers' as const,
       name: 'Early',
       x:    ordered.map(r => r.earlyTotal / ec),
-      y:    ordered.map(r => r.store.store_id),
+      y:    ordered.map(r => storeLabel(r)),
       marker: { symbol: 'circle', size: 10, color: '#9ca3af' },
-      hovertemplate: '<b>%{y}</b><br>Early: ₹%{x:,.0f}<extra></extra>',
+      hovertemplate: '<b>%{y}</b><br>Early avg: ₹%{x:,.0f}<extra></extra>',
     }
 
     return { chartTraces: [...lines, earlyTrace, midTrace, recentTrace], chartCategories }
@@ -205,8 +213,13 @@ export default function FallenStars({
 
   if (!rows.length) {
     return (
-      <div className="flex items-center justify-center h-64 text-gray-500">
-        No declining stores found in the selected filters.
+      <div className="rounded-xl border border-gray-200 bg-white min-h-[320px] flex flex-col items-center justify-center gap-3 p-8 text-center">
+        <TrendingDown className="h-8 w-8 text-gray-300" />
+        <p className="text-base font-semibold text-gray-700">No Fallen Stars in Scope</p>
+        <p className="text-sm text-gray-400 max-w-sm">
+          No stores meet the Fallen Star criteria{filters.state ? ` in ${filters.state}` : ''}{filters.category ? ` for ${filters.category}` : ''}.
+          Fallen Stars require strict phase-over-phase decline (Early → Mid → Recent) with ≥ 30% total decline from an above-median base.
+        </p>
       </div>
     )
   }
@@ -217,15 +230,18 @@ export default function FallenStars({
     <div className="space-y-6">
 
       {/* Page Header */}
-      <div>
+      <div className="pb-1 border-b border-gray-100">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-red-600 bg-red-50 px-2 py-0.5 rounded-full">Risk &amp; Opportunity</span>
+        </div>
         <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-          <TrendingDown className="w-5 h-5 text-red-500" />
-          Stores Losing Ground
+          <TrendingDown className="w-5 h-5 text-red-500 shrink-0" />
+          Which once-strong stores are eroding?
         </h2>
-        <p className="text-sm text-gray-500 mt-1">
-          {rows.length} Fallen Star stores — once-strong stores with strict phase-over-phase decline (Early &gt; Mid &gt; Recent)
-          in both Revenue and Plans Sold, dropping ≥ 30% from a historically above-median base.
-          Identify root causes and intervene before further erosion.
+        <p className="text-sm text-gray-500 mt-1 max-w-2xl">
+          {rows.length} Fallen Star store{rows.length !== 1 ? 's' : ''}{filters.state ? ` in ${filters.state}` : ''} — once-strong stores with strict phase-over-phase decline
+          (Early → Mid → Recent), dropping ≥ 30% from a historically above-median base.
+          Identify root causes and intervene before further revenue erosion.
         </p>
       </div>
 
@@ -250,12 +266,17 @@ export default function FallenStars({
 
         <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
           <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Worst Faller</p>
-          <p className="text-2xl font-bold text-gray-900 truncate">
-            {kpi.worstFaller?.store.store_name ?? kpi.worstFaller?.store.store_id ?? '—'}
-          </p>
-          <p className="text-xs text-red-600 mt-1">
-            {kpi.worstFaller?.growthPct != null ? `${fmtPct(kpi.worstFaller.growthPct)} decline` : '—'}
-          </p>
+          {kpi.worstFaller ? (
+            <>
+              <p className="text-sm font-bold text-gray-900 truncate">{kpi.worstFaller.store.store_name ?? kpi.worstFaller.store.store_id}</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">{kpi.worstFaller.store.store_id}</p>
+              <p className="text-xl font-bold text-red-600 mt-1 tabular-nums">
+                {kpi.worstFaller.growthPct != null ? `${fmtPct(kpi.worstFaller.growthPct)} decline` : '—'}
+              </p>
+            </>
+          ) : (
+            <p className="text-2xl font-bold text-gray-900">—</p>
+          )}
         </div>
 
         <div className="rounded-xl border border-red-200 bg-red-50 p-4 shadow-sm">
@@ -350,54 +371,70 @@ export default function FallenStars({
               </tr>
             </thead>
             <tbody>
-              {sorted.map((row, i) => (
-                <tr
-                  key={row.store.store_id}
-                  onClick={() => onNavigateToStore?.(row.store.store_id)}
-                  className={cn(
-                    'border-b border-gray-100 transition-colors',
-                    i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50',
-                    onNavigateToStore ? 'cursor-pointer hover:bg-red-50/40' : 'hover:bg-gray-50',
-                  )}
-                >
-                  <td className="px-4 py-2.5 font-semibold text-gray-800 whitespace-nowrap">
-                    {row.store.store_name ?? row.store.store_id}
-                  </td>
-                  <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">
-                    {row.store.state ?? '—'}
-                  </td>
-                  <td className={cn('px-4 py-2.5 text-[11px] font-semibold', CATEGORY_TEXT_COLOR[row.category])}>
-                    {row.category}
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-gray-700 font-medium tabular-nums">
-                    {fmtInr(row.earlyTotal)}
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-gray-400 tabular-nums">
-                    {fmtInr(row.recentTotal)}
-                  </td>
-                  <td className="px-4 py-2.5 text-right font-semibold text-red-600 tabular-nums">
-                    {row.growthPct != null ? fmtPct(row.growthPct) : '—'}
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-gray-700 font-medium tabular-nums">
-                    {row.earlyPlans.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-violet-500 tabular-nums">
-                    {row.midPlans.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-gray-400 tabular-nums">
-                    {row.recentPlans.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-2.5 text-center text-gray-600 tabular-nums">
-                    {row.earlyRank}
-                  </td>
-                  <td className="px-4 py-2.5 text-center text-gray-400 tabular-nums">
-                    {row.recentRank}
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-gray-600 tabular-nums">
-                    {row.localHealth.toFixed(1)}
-                  </td>
-                </tr>
-              ))}
+              {(() => {
+                const maxDecline = Math.max(...sorted.map(r => Math.abs(r.growthPct ?? 0)), 1)
+                return sorted.map((row, i) => {
+                  const barW = (Math.abs(row.growthPct ?? 0) / maxDecline) * 100
+                  return (
+                    <tr
+                      key={row.store.store_id}
+                      onClick={() => onNavigateToStore?.(row.store.store_id)}
+                      className={cn(
+                        'border-b border-gray-100 transition-colors',
+                        i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50',
+                        onNavigateToStore ? 'cursor-pointer hover:bg-red-50/30' : 'hover:bg-gray-50',
+                      )}
+                    >
+                      <td className="px-3 py-2.5 text-center text-gray-400 text-xs">{i + 1}</td>
+                      <td className="px-3 py-2.5">
+                        <div className="font-semibold text-gray-800 truncate max-w-[160px]">{row.store.store_name ?? row.store.store_id}</div>
+                        <div className="text-[10px] text-gray-400 font-mono mt-0.5">{row.store.store_id}</div>
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap text-xs">
+                        {row.store.state ?? '—'}
+                      </td>
+                      <td className={cn('px-3 py-2.5 text-[11px] font-semibold whitespace-nowrap', CATEGORY_TEXT_COLOR[row.category])}>
+                        {row.category}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-gray-700 font-medium tabular-nums text-xs">
+                        {fmtInr(row.earlyTotal)}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-gray-400 tabular-nums text-xs">
+                        {fmtInr(row.recentTotal)}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-semibold text-red-600 tabular-nums text-xs">
+                        {row.growthPct != null ? fmtPct(row.growthPct) : '—'}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-gray-700 font-medium tabular-nums text-xs">
+                        {row.earlyPlans.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-violet-500 tabular-nums text-xs">
+                        {row.midPlans.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-gray-400 tabular-nums text-xs">
+                        {row.recentPlans.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2.5 text-center text-gray-600 tabular-nums text-xs">
+                        {row.earlyRank}
+                      </td>
+                      <td className="px-3 py-2.5 text-center text-gray-400 tabular-nums text-xs">
+                        {row.recentRank}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-gray-600 tabular-nums text-xs">
+                        {row.localHealth.toFixed(1)}%
+                      </td>
+                      <td className="px-3 py-2.5 w-24 hidden lg:table-cell">
+                        <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-red-500"
+                            style={{ width: `${Math.min(barW, 100)}%` }}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })
+              })()}
             </tbody>
           </table>
         </div>

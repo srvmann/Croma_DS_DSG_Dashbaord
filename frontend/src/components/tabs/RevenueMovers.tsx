@@ -10,7 +10,7 @@ import type { StoreRecord } from '@/lib/api'
 import { allocatePhases, classifyAllStores } from '@/lib/classificationEngine'
 import type { StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
-import { fmtInr, fmtPct } from '@/lib/formatting'
+import { fmtInr, fmtPct, fmtCount, monthAbbr, fmtStore } from '@/lib/formatting'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -35,14 +35,6 @@ interface MoverRow {
 function phasePlanSum(store: StoreRecord, ms: string[]) {
   return ms.reduce((s, m) => s + (store.monthly_plans_count?.[m] ?? 0), 0)
 }
-function abbr(m: string) {
-  return m.replace(/-20(\d{2})$/, "'$1")
-}
-function fmtCount(n: number): string {
-  if (n >= 1e5) return `${(n / 1e5).toFixed(1)}L`
-  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`
-  return n.toLocaleString('en-IN')
-}
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
@@ -59,6 +51,7 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
     topGrowing, topDeclining, insufficient,
     avgGrowthPct, avgDeclinePct,
   } = useMemo(() => {
+    try {
     let fs: StoreRecord[] = stores
     if (filters.state)    fs = fs.filter(s => s.state    === filters.state)
     if (filters.category) fs = fs.filter(s => s.category === filters.category)
@@ -87,9 +80,9 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
     const classResult = classifyAllStores(fs, fm)
     const { earlyMonths: early, midMonths: mid, recentMonths: recent } = classResult.phases
 
-    const earlyRange  = `${abbr(early[0])} – ${abbr(early[early.length - 1])}`
-    const midRange    = mid.length > 0 ? `${abbr(mid[0])} – ${abbr(mid[mid.length - 1])}` : '—'
-    const recentRange = `${abbr(recent[0])} – ${abbr(recent[recent.length - 1])}`
+    const earlyRange  = `${monthAbbr(early[0])} – ${monthAbbr(early[early.length - 1])}`
+    const midRange    = mid.length > 0 ? `${monthAbbr(mid[0])} – ${monthAbbr(mid[mid.length - 1])}` : '—'
+    const recentRange = `${monthAbbr(recent[0])} – ${monthAbbr(recent[recent.length - 1])}`
 
     // Build allMovers from classification metrics — avoids recomputing phases
     const allMovers: MoverRow[] = classResult.metrics
@@ -136,6 +129,16 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
       growingStores, decliningStores, allMovers, maxAbsChange, netChange,
       topGrowing, topDeclining, insufficient: false,
       avgGrowthPct, avgDeclinePct,
+    }
+    } catch (e) {
+      console.error('[RevenueMovers] computation error:', e)
+      return {
+        earlyRange: '—', midRange: '—', recentRange: '—',
+        growingStores: [], decliningStores: [], allMovers: [],
+        maxAbsChange: 1, netChange: 0,
+        topGrowing: null, topDeclining: null, insufficient: true,
+        avgGrowthPct: 0, avgDeclinePct: 0,
+      }
     }
   }, [stores, months, filters])
 
@@ -225,9 +228,11 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
         line: { color: '#fff', width: 1 },
       },
       text: leftRows.map(({ m, rank, isGrowing }) => {
-        const name  = (m.store.store_name ?? m.store.store_id).slice(0, 12)
+        const label = m.store.store_name
+          ? `${m.store.store_name.slice(0, 14)} (${m.store.store_id})`
+          : m.store.store_id
         const state = m.store.state ? ` · ${m.store.state}` : ''
-        return `${isGrowing ? '▲' : '▼'}${rank} ${name}${state}  `
+        return `${isGrowing ? '▲' : '▼'}${rank} ${label}${state}  `
       }),
       textposition: 'middle left',
       textfont: {
@@ -260,7 +265,7 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
         color: showStores.map(m => m.absChange > 0 ? '#059669' : '#dc2626'),
       },
       customdata: showStores.map(m => [
-        m.store.store_name ?? m.store.store_id,
+        fmtStore(m.store),
         m.store.state ?? '—',
         fmtInr(m.recentAvg),
         fmtInr(m.earlyAvg),
@@ -351,18 +356,21 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
     <div className="space-y-6">
 
       {/* Page Header */}
-      <div>
+      <div className="pb-1 border-b border-gray-100">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">Momentum &amp; Movement</span>
+        </div>
         <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-          <BarChart2 className="w-5 h-5 text-blue-500" />
-          Biggest Revenue Swings
+          <BarChart2 className="w-5 h-5 text-blue-500 shrink-0" />
+          What is changing, and how fast?
         </h2>
-        <p className="text-sm text-gray-500 mt-1">
-          Ranks stores by avg monthly revenue shift between phases · Early{' '}
-          <span className="text-gray-600 font-medium">({earlyRange})</span>
+        <p className="text-sm text-gray-500 mt-1 max-w-2xl">
+          Stores ranked by average monthly revenue shift — Early{' '}
+          <span className="text-gray-700 font-semibold">({earlyRange})</span>
           {' vs '}
-          Recent <span className="text-gray-600 font-medium">({recentRange})</span>
+          Recent <span className="text-gray-700 font-semibold">({recentRange})</span>
           {' · '}
-          <span className={cn('font-medium', filters.state ? 'text-blue-600' : 'text-gray-500')}>
+          <span className={cn('font-semibold', filters.state ? 'text-blue-600' : 'text-gray-600')}>
             {scopeLabel}
           </span>
         </p>
@@ -448,7 +456,7 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
                 Best Performer · {scopeLabel}
               </p>
               <p className="text-sm font-bold text-gray-900 truncate">
-                {topGrowing.store.store_name ?? topGrowing.store.store_id}
+                {fmtStore(topGrowing.store)}
               </p>
               <p className="text-xs text-gray-400 mt-0.5">{topGrowing.store.state ?? '—'} · {topGrowing.category}</p>
               <p className="text-2xl font-bold text-emerald-600 mt-2 tabular-nums">
@@ -463,7 +471,7 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
                 Steepest Decline · {scopeLabel}
               </p>
               <p className="text-sm font-bold text-gray-900 truncate">
-                {topDeclining.store.store_name ?? topDeclining.store.store_id}
+                {fmtStore(topDeclining.store)}
               </p>
               <p className="text-xs text-gray-400 mt-0.5">{topDeclining.store.state ?? '—'} · {topDeclining.category}</p>
               <p className="text-2xl font-bold text-red-500 mt-2 tabular-nums">
@@ -666,8 +674,9 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
                     )}
                   >
                     <td className="px-3 py-2 text-gray-400">{i + 1}</td>
-                    <td className="px-3 py-2 font-semibold text-gray-800 max-w-[140px] truncate">
-                      {row.store.store_name ?? row.store.store_id}
+                    <td className="px-3 py-2 font-semibold text-gray-800 max-w-[200px]">
+                      <div className="truncate">{row.store.store_name ?? row.store.store_id}</div>
+                      <div className="text-[10px] text-gray-400 font-normal">{row.store.store_id}</div>
                     </td>
                     <td className="px-3 py-2 text-gray-500 hidden sm:table-cell">
                       {row.store.state ?? '—'}
