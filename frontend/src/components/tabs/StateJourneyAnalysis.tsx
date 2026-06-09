@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   ChevronUp, ChevronDown,
@@ -14,7 +14,9 @@ import type { StoreRecord } from '@/lib/api'
 import { allocatePhases, type StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
 import { fmtInr, fmtPct } from '@/lib/formatting'
+import { exportCsv } from '@/lib/tableExport'
 import { PT, PLOTLY_BASE } from '@/lib/plotlyTheme'
+import DataTable from '@/components/ui/DataTable'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -258,7 +260,6 @@ export default function StateJourneyAnalysis({ filters }: Props) {
   const { stores, months, classification } = useDataContext()
   const [sortKey, setSortKey] = useState<SortKey>('revenue')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
-  const [compState, setCompState] = useState<string | null>(null)
 
   // ── Month range ────────────────────────────────────────────────────────────
   const { fm, early, mid, recent } = useMemo(() => {
@@ -426,18 +427,15 @@ export default function StateJourneyAnalysis({ filters }: Props) {
     }
   }, [filters.state, stateScopedStores])
 
-  // ── Store Revenue by State chart ───────────────────────────────────────────
+  // ── Store Revenue by State chart (drill-down: only when state filter active) ──
   const storeCompData = useMemo(() => {
-    const largestState = stateMetrics[0]?.state ?? null
-    // Global state filter takes priority over the local dropdown
-    const effectiveSt  = filters.state || compState || largestState
-    if (!effectiveSt) return { traces: [], stateName: '', count: 0, chartHeight: 320 }
+    if (!filters.state) return { traces: [], stateName: '', count: 0, chartHeight: 320 }
 
     const stateStores = classifiedStores
-      .filter(c => (c.store.state ?? 'Unknown') === effectiveSt)
+      .filter(c => (c.store.state ?? 'Unknown') === filters.state)
       .sort((a, b) => a.rev - b.rev)
 
-    if (!stateStores.length) return { traces: [], stateName: effectiveSt, count: 0, chartHeight: 320 }
+    if (!stateStores.length) return { traces: [], stateName: filters.state, count: 0, chartHeight: 320 }
 
     const labels = stateStores.map(c => c.store.store_name ?? c.store.store_id)
 
@@ -448,53 +446,127 @@ export default function StateJourneyAnalysis({ filters }: Props) {
       : c.growthPct >= -15 ? '#f97316'
       :                      '#dc2626'
     )
-
     const growthLabels = stateStores.map(c =>
       c.growthPct !== null
         ? `  ${c.growthPct >= 0 ? '▲' : '▼'} ${Math.abs(c.growthPct).toFixed(1)}%`
         : ''
     )
-
     const growthLabelColors = stateStores.map(c =>
-      c.growthPct === null ? '#94a3b8'
-      : c.growthPct >= 0   ? '#15803d'
-      :                      '#dc2626'
+      c.growthPct === null ? '#94a3b8' : c.growthPct >= 0 ? '#15803d' : '#dc2626'
     )
 
-    const chartHeight = Math.max(320, stateStores.length * 30 + 80)
-
     return {
-      stateName: effectiveSt,
+      stateName: filters.state,
       count: stateStores.length,
-      chartHeight,
+      chartHeight: Math.max(320, stateStores.length * 30 + 80),
       traces: [
         {
-          type:        'bar' as const,
-          orientation: 'h' as const,
-          name:        'Early',
-          y:           labels,
-          x:           stateStores.map(c => c.earlyR),
-          marker:      { color: '#bfdbfe', opacity: 0.9 },
+          type: 'bar' as const, orientation: 'h' as const, name: 'Early',
+          y: labels, x: stateStores.map(c => c.earlyR),
+          marker: { color: '#bfdbfe', opacity: 0.9 },
           hovertemplate: '<b>%{y}</b><br>Early period: ₹%{x:,.0f}<extra></extra>',
         },
         {
-          type:        'bar' as const,
-          orientation: 'h' as const,
-          name:        'Recent',
-          y:           labels,
-          x:           stateStores.map(c => c.recentR),
-          marker:      { color: recentColors, opacity: 0.92 },
-          text:        growthLabels,
+          type: 'bar' as const, orientation: 'h' as const, name: 'Recent',
+          y: labels, x: stateStores.map(c => c.recentR),
+          marker: { color: recentColors, opacity: 0.92 },
+          text: growthLabels,
           textposition: 'outside' as const,
-          textfont:    { size: 9, color: growthLabelColors },
-          cliponaxis:  false,
-          hovertemplate:
-            '<b>%{y}</b><br>Recent period: ₹%{x:,.0f}'
-            + '<br>Growth: %{text}<extra></extra>',
+          textfont: { size: 9, color: growthLabelColors },
+          cliponaxis: false,
+          hovertemplate: '<b>%{y}</b><br>Recent period: ₹%{x:,.0f}<br>Growth: %{text}<extra></extra>',
         },
       ],
     }
-  }, [classifiedStores, compState, stateMetrics, filters.state])
+  }, [classifiedStores, filters.state])
+
+  // ── Revenue × Growth bubble scatter (all-states executive view) ────────────
+  const stateRevChartData = useMemo(() => {
+    if (filters.state || !stateMetrics.length) return null
+
+    const maxStores = Math.max(...stateMetrics.map(m => m.total), 1)
+
+    return {
+      traces: [{
+        type: 'scatter' as const,
+        mode: 'text+markers' as const,
+        x:    stateMetrics.map(m => m.totalRevV),
+        y:    stateMetrics.map(m => m.growthPct ?? 0),
+        text: stateMetrics.map(m => m.state),
+        textposition: 'top center' as const,
+        textfont: { size: 10, color: '#374151' },
+        marker: {
+          size:       stateMetrics.map(m => 14 + (m.total / maxStores) * 26),
+          color:      stateMetrics.map(m => m.health),
+          colorscale: COLORSCALE_HEALTH_PASTEL,
+          cmin: 0, cmax: 100,
+          opacity: 0.85,
+          line: { color: '#ffffff', width: 1.5 },
+          colorbar: {
+            thickness: 10, len: 0.75,
+            tickfont: { color: '#6b7280', size: 9 },
+            title: { text: 'Health', side: 'right' as const, font: { color: '#6b7280', size: 9 } },
+          },
+        },
+        customdata: stateMetrics.map(m => [
+          fmtInr(m.totalRevV), m.total, m.active,
+          m.growthPct != null ? fmtPct(m.growthPct) : 'N/A',
+          m.health.toFixed(1), m.rising, m.fallen, fmtInr(m.avgStore),
+        ]),
+        hovertemplate:
+          '<b>%{text}</b><br>'
+          + 'Revenue: %{customdata[0]}<br>'
+          + 'Stores: %{customdata[1]} (%{customdata[2]} active)<br>'
+          + 'Growth: %{customdata[3]}<br>'
+          + 'Health: %{customdata[4]}<br>'
+          + 'Rising Stars: %{customdata[5]} · Fallen: %{customdata[6]}<br>'
+          + 'Avg/Store: %{customdata[7]}'
+          + '<extra></extra>',
+      }],
+    }
+  }, [stateMetrics, filters.state])
+
+  // ── Category breakdown bar for store distribution (state drill-down) ───────
+  const stateCatData = useMemo(() => {
+    if (!filters.state || !stateScopedStores.length) return null
+
+    const CAT_COLOR: Record<string, string> = {
+      'New Bloomer':    '#10b981',
+      'Rising Star':    '#eab308',
+      'Growing Store':  '#3b82f6',
+      'Constant Store': '#8b5cf6',
+      'Declining Store':'#f97316',
+      'Fallen Star':    '#dc2626',
+      'Inactive Store': '#9ca3af',
+    }
+    const ALL_CATS = ['New Bloomer','Rising Star','Growing Store','Constant Store','Declining Store','Fallen Star','Inactive Store']
+    const total = stateScopedStores.length
+
+    const bars = ALL_CATS
+      .map(cat => ({
+        cat,
+        count: stateScopedStores.filter(c => c.category === cat).length,
+        color: CAT_COLOR[cat] ?? '#9ca3af',
+      }))
+      .filter(d => d.count > 0)
+      .sort((a, b) => a.count - b.count)  // ascending → largest at top
+
+    return {
+      traces: [{
+        type: 'bar' as const,
+        orientation: 'h' as const,
+        y: bars.map(d => d.cat),
+        x: bars.map(d => d.count),
+        marker: { color: bars.map(d => d.color), opacity: 0.88 },
+        text: bars.map(d => `  ${d.count} — ${((d.count / total) * 100).toFixed(0)}%`),
+        textposition: 'outside' as const,
+        textfont: { size: 10, color: '#374151' },
+        cliponaxis: false,
+        hovertemplate: '<b>%{y}</b><br>%{x} stores (%{text})<extra></extra>',
+      }],
+      height: Math.max(220, bars.length * 46 + 60),
+    }
+  }, [stateScopedStores, filters.state])
 
   // ── Treemap: states overview OR store drill-down when state is selected ────
   const treemapData = useMemo(() => {
@@ -685,6 +757,25 @@ export default function StateJourneyAnalysis({ filters }: Props) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(key); setSortDir('desc') }
   }
+
+  const handleExportCsv = useCallback(() => {
+    const headers = [
+      'State', 'Stores', 'Active', 'Inactive',
+      'Early Rev', 'Recent Rev', 'Growth %', 'Avg/Store', 'Net %',
+      'New Bloomer', 'Rising Star', 'Growing', 'Stable', 'Declining', 'Fallen', 'Inactive Stores',
+      'Health Score', 'Risk Index', 'Opportunity',
+    ]
+    const rows = tableRows.map(r => [
+      r.state, r.total, r.active, r.inactive,
+      r.earlyRev.toFixed(0), r.recentRev.toFixed(0),
+      r.growthPct != null ? r.growthPct.toFixed(1) + '%' : 'N/A',
+      r.avgStore.toFixed(0),
+      r.netPct != null ? r.netPct.toFixed(1) + '%' : '—',
+      r.newBloomer, r.rising, r.growing, r.constant, r.declining, r.fallen, r.inactiveStore,
+      r.health.toFixed(1), r.risk.toFixed(1), r.opp,
+    ])
+    exportCsv('state-health', headers, rows)
+  }, [tableRows])
 
   const sortIcon = (col: SortKey) =>
     sortKey !== col
@@ -906,80 +997,114 @@ export default function StateJourneyAnalysis({ filters }: Props) {
           <NetworkFunnel counts={funnel} total={funnel.all} />
         </motion.div>
 
-        {/* Store Revenue by State */}
+        {/* Revenue Contribution by State / Store Revenue by State */}
         <motion.div
           initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.18, duration: 0.4 }}
           className={card}
         >
-          <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
-            <div>
-              <h3 className="text-sm font-semibold text-gray-800">Store Revenue by State</h3>
-              <p className="text-[11px] text-gray-400 mt-0.5">
-                All {storeCompData.count} stores in{' '}
-                <span className="font-semibold text-blue-600">{storeCompData.stateName}</span>
-                {' '}· bar colour = growth direction
-              </p>
-            </div>
-            {filters.state ? (
-              <div className="text-xs border border-blue-200 rounded-lg px-2.5 py-1.5 bg-blue-50 text-blue-700 shrink-0">
-                {filters.state} (filtered)
+          {filters.state ? (
+            /* ── Drill-down: per-store chart for the selected state ── */
+            <>
+              <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-800">Store Revenue by State</h3>
+                  <p className="text-[11px] text-gray-400 mt-0.5">
+                    All {storeCompData.count} stores in{' '}
+                    <span className="font-semibold text-blue-600">{storeCompData.stateName}</span>
+                    {' · bar colour = growth direction'}
+                  </p>
+                </div>
+                <div className="text-xs border border-blue-200 rounded-lg px-2.5 py-1.5 bg-blue-50 text-blue-700 shrink-0">
+                  {filters.state} (filtered)
+                </div>
               </div>
-            ) : (
-              <select
-                value={storeCompData.stateName}
-                onChange={e => setCompState(e.target.value)}
-                className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-700 cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-400 shrink-0"
-              >
-                {stateMetrics.map(m => (
-                  <option key={m.state} value={m.state}>
-                    {m.state} ({m.total} stores)
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          {storeCompData.traces.length > 0 ? (
-            <div className="overflow-y-auto" style={{ maxHeight: 520 }}>
-              <Plot
-                data={storeCompData.traces}
-                layout={{
-                  ...PLOTLY_BASE,
-                  barmode: 'group' as const,
-                  legend: {
-                    bgcolor: 'rgba(0,0,0,0)',
-                    font:    { color: PT.font, size: 10 },
-                    orientation: 'h' as const,
-                    y: -0.06,
-                  },
-                  xaxis: {
-                    gridcolor: PT.grid,
-                    linecolor: PT.line,
-                    tickcolor: PT.line,
-                    automargin: true,
-                    title:      { text: 'Revenue (₹)' },
-                    tickformat: '.3s',
-                    tickprefix: '₹',
-                  },
-                  yaxis: {
-                    gridcolor:  PT.grid,
-                    linecolor:  PT.line,
-                    tickcolor:  PT.line,
-                    automargin: true,
-                    tickfont:   { size: 10 },
-                  },
-                  margin: { l: 160, r: 90, t: 8, b: 50 },
-                  height: storeCompData.chartHeight,
-                }}
-                config={{ displayModeBar: false, responsive: true }}
-                style={{ width: '100%' }}
-              />
-            </div>
+              {storeCompData.traces.length > 0 ? (
+                <div className="overflow-y-auto" style={{ maxHeight: 520 }}>
+                  <Plot
+                    data={storeCompData.traces}
+                    layout={{
+                      ...PLOTLY_BASE,
+                      barmode: 'group' as const,
+                      legend: {
+                        bgcolor: 'rgba(0,0,0,0)',
+                        font: { color: PT.font, size: 10 },
+                        orientation: 'h' as const,
+                        y: -0.06,
+                      },
+                      xaxis: {
+                        gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line,
+                        automargin: true,
+                        title: { text: 'Revenue (₹)' },
+                        tickformat: '.3s', tickprefix: '₹',
+                      },
+                      yaxis: {
+                        gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line,
+                        automargin: true, tickfont: { size: 10 },
+                      },
+                      margin: { l: 160, r: 90, t: 8, b: 50 },
+                      height: storeCompData.chartHeight,
+                    }}
+                    config={{ displayModeBar: false, responsive: true }}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              ) : (
+                <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
+                  No store data for selected state
+                </div>
+              )}
+            </>
           ) : (
-            <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
-              No store data for selected state
-            </div>
+            /* ── Executive overview: revenue × growth bubble scatter ── */
+            <>
+              <div className="mb-3">
+                <h3 className="text-sm font-semibold text-gray-800">Revenue vs Growth by State</h3>
+                <p className="text-[11px] text-gray-400 mt-0.5">
+                  X = total revenue · Y = growth % · bubble size = store count · colour = health score · hover for details
+                </p>
+              </div>
+              {stateRevChartData ? (
+                <Plot
+                  data={stateRevChartData.traces}
+                  layout={{
+                    ...PLOTLY_BASE,
+                    xaxis: {
+                      gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line,
+                      automargin: true,
+                      title: { text: 'Total Revenue →', font: { size: 11, color: '#6b7280' } },
+                      tickformat: '.3s', tickprefix: '₹',
+                    },
+                    yaxis: {
+                      gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line,
+                      automargin: true,
+                      title: { text: 'Growth % →', font: { size: 11, color: '#6b7280' } },
+                      zeroline: true, zerolinecolor: '#d1d5db', zerolinewidth: 1.5,
+                      ticksuffix: '%',
+                    },
+                    shapes: [{
+                      type: 'line', xref: 'paper', yref: 'y',
+                      x0: 0, x1: 1, y0: 0, y1: 0,
+                      line: { color: '#d1d5db', width: 1.5, dash: 'dot' },
+                    }],
+                    annotations: [
+                      { x: 0.99, y: 0.99, xref: 'paper', yref: 'paper', text: '↑ Growing', showarrow: false, xanchor: 'right', yanchor: 'top', font: { color: '#10b981', size: 10 } },
+                      { x: 0.99, y: 0.01, xref: 'paper', yref: 'paper', text: '↓ Declining', showarrow: false, xanchor: 'right', yanchor: 'bottom', font: { color: '#ef4444', size: 10 } },
+                    ],
+                    hovermode: 'closest',
+                    showlegend: false,
+                    margin: { l: 54, r: 80, t: 16, b: 54 },
+                    height: 360,
+                  }}
+                  config={{ displayModeBar: false, responsive: true }}
+                  style={{ width: '100%' }}
+                />
+              ) : (
+                <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
+                  No state data available
+                </div>
+              )}
+            </>
           )}
         </motion.div>
       </div>
@@ -998,20 +1123,43 @@ export default function StateJourneyAnalysis({ filters }: Props) {
           </h3>
           <p className="text-[11px] text-gray-400 mb-2">
             {filters.state
-              ? `Tile size = revenue · colour = health · ${stateScopedStores.length} stores`
+              ? `Category health breakdown · ${stateScopedStores.length} stores total`
               : 'Tile size = store count · colour = health score (green healthy → red at-risk)'
             }
           </p>
-          <Plot
-            data={treemapData}
-            layout={{
-              ...PLOTLY_BASE,
-              margin: { l: 0, r: 0, t: 0, b: 0 },
-              height: 360,
-            }}
-            config={{ displayModeBar: false, responsive: true }}
-            style={{ width: '100%' }}
-          />
+          {filters.state && stateCatData ? (
+            <Plot
+              data={stateCatData.traces}
+              layout={{
+                ...PLOTLY_BASE,
+                xaxis: {
+                  gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line,
+                  title: { text: 'Number of Stores', font: { size: 10, color: '#6b7280' } },
+                  automargin: true,
+                },
+                yaxis: {
+                  gridcolor: PT.grid, linecolor: PT.line,
+                  tickfont: { size: 11 }, automargin: true,
+                },
+                margin: { l: 120, r: 80, t: 8, b: 40 },
+                height: stateCatData.height,
+                showlegend: false,
+              }}
+              config={{ displayModeBar: false, responsive: true }}
+              style={{ width: '100%' }}
+            />
+          ) : (
+            <Plot
+              data={treemapData}
+              layout={{
+                ...PLOTLY_BASE,
+                margin: { l: 0, r: 0, t: 0, b: 0 },
+                height: 360,
+              }}
+              config={{ displayModeBar: false, responsive: true }}
+              style={{ width: '100%' }}
+            />
+          )}
         </motion.div>
 
         {/* Risk vs Opportunity Scatter */}
@@ -1088,19 +1236,13 @@ export default function StateJourneyAnalysis({ filters }: Props) {
       <motion.div
         initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.30, duration: 0.4 }}
-        className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden"
       >
-        <div className="px-4 py-3 border-b border-gray-100">
-          <h3 className="text-sm font-semibold text-gray-800">
-            State Ranking Table
-            <span className="ml-2 text-[10px] font-normal text-gray-400 uppercase tracking-wider">
-              — click a column to sort
-            </span>
-          </h3>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs whitespace-nowrap">
+        <DataTable
+          title="State Ranking Table"
+          subtitle="Click a column header to sort"
+          onExportCsv={handleExportCsv}
+        >
+        <table className="w-full text-xs whitespace-nowrap">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50">
                 <th className="px-3 py-2.5 text-left text-gray-400 w-8 sticky left-0 bg-gray-50">#</th>
@@ -1244,7 +1386,7 @@ export default function StateJourneyAnalysis({ filters }: Props) {
               ))}
             </tbody>
           </table>
-        </div>
+        </DataTable>
       </motion.div>
 
     </div>

@@ -11,6 +11,8 @@ import { allocatePhases, classifyAllStores } from '@/lib/classificationEngine'
 import type { StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
 import { fmtInr, fmtPct, fmtCount, monthAbbr, fmtStore } from '@/lib/formatting'
+import { exportCsv, exportExcel } from '@/lib/tableExport'
+import DataTable from '@/components/ui/DataTable'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -323,6 +325,22 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
     else { setTableSort(key); setTableDir('desc') }
   }
 
+  function buildExportData() {
+    const headers = [
+      '#', 'Store ID', 'Store Name', 'State', 'Category',
+      `Early Avg (${earlyRange})`, `Mid Avg (${midRange})`, `Recent Avg (${recentRange})`,
+      'Δ Avg (₹)', 'Δ %',
+    ]
+    const rows = sortedTable.map((r, i) => [
+      i + 1, r.store.store_id, r.store.store_name ?? '', r.store.state ?? '', r.category,
+      r.earlyAvg.toFixed(0), r.midAvg.toFixed(0), r.recentAvg.toFixed(0),
+      r.absChange.toFixed(0), r.pctChange != null ? r.pctChange.toFixed(1) : '',
+    ])
+    return { headers, rows }
+  }
+  function handleExportCsv()   { const { headers, rows } = buildExportData(); exportCsv('revenue-movers',   headers, rows) }
+  function handleExportExcel() { const { headers, rows } = buildExportData(); exportExcel('revenue-movers', headers, rows) }
+
   if (insufficient) {
     return (
       <div className="flex items-center justify-center h-64 text-gray-500">
@@ -590,24 +608,14 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
       </div>
 
       {/* Full phase ranking table */}
-      <div>
-        <div className="mb-3 flex items-center justify-between">
-          <div>
-            <h3 className="text-sm font-semibold text-gray-700">
-              Full Phase Ranking — {allMovers.length} stores
-              {filters.state && <span className="text-blue-600"> · {filters.state}</span>}
-            </h3>
-            <p className="text-[11px] text-gray-400 mt-0.5">
-              Click column headers to sort · Plan counts = total policies sold per phase
-            </p>
-          </div>
-          <div className="text-right">
-            <p className="text-xs text-gray-400">{earlyRange} · {midRange} · {recentRange}</p>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
-          <table className="w-full text-xs min-w-[960px]">
+      <DataTable
+        title={`Full Phase Ranking — ${allMovers.length} store${allMovers.length !== 1 ? 's' : ''}${filters.state ? ` · ${filters.state}` : ''}`}
+        subtitle="Click column headers to sort · Plan counts = total policies sold per phase"
+        headerRight={<span className="text-xs text-gray-400 whitespace-nowrap">{earlyRange} · {midRange} · {recentRange}</span>}
+        onExportCsv={handleExportCsv}
+        onExportExcel={handleExportExcel}
+      >
+        <table className="w-full text-xs min-w-[960px]">
             <thead>
               <tr className="border-b border-gray-200 bg-gray-50">
                 <th className="px-3 py-3 text-left font-semibold uppercase tracking-wider text-gray-500 w-8">#</th>
@@ -732,8 +740,7 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
               })}
             </tbody>
           </table>
-        </div>
-      </div>
+      </DataTable>
 
     </div>
   )

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { TrendingDown, Info, ArrowRight } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import createPlotlyComponent from 'react-plotly.js/factory'
@@ -9,7 +9,9 @@ import type { FilterState } from '@/hooks/useFilters'
 import type { StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
 import { fmtInr, fmtPct, fmtStore } from '@/lib/formatting'
+import { exportCsv } from '@/lib/tableExport'
 import { CATEGORY_TEXT_COLOR } from '@/lib/categoryStyles'
+import DataTable from '@/components/ui/DataTable'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -209,6 +211,24 @@ export default function FallenStars({
     }
   }
 
+  const handleExportCsv = useCallback(() => {
+    const headers = [
+      '#', 'Store ID', 'Store Name', 'State', 'Category',
+      'Early Revenue', 'Recent Revenue', 'Decline %',
+      'Early Plans', 'Mid Plans', 'Recent Plans',
+      'Early Rank', 'Recent Rank', 'Health %',
+    ]
+    const rows = sorted.map((r, i) => [
+      i + 1, r.store.store_id, r.store.store_name ?? '', r.store.state ?? '',
+      r.category,
+      r.earlyTotal.toFixed(0), r.recentTotal.toFixed(0),
+      r.growthPct != null ? r.growthPct.toFixed(1) : '',
+      r.earlyPlans, r.midPlans, r.recentPlans,
+      r.earlyRank, r.recentRank, r.localHealth.toFixed(1),
+    ])
+    exportCsv('fallen-stores', headers, rows)
+  }, [sorted])
+
   // ── Empty state ───────────────────────────────────────────────────────────────
 
   if (!rows.length) {
@@ -342,13 +362,12 @@ export default function FallenStars({
       )}
 
       {/* Detail table */}
-      <div>
-        <div className="mb-3">
-          <h3 className="text-sm font-semibold text-gray-700">Declining Stores Detail</h3>
-          <p className="text-[11px] text-gray-400 mt-0.5">Click column headers to sort</p>
-        </div>
-        <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
-          <table className="w-full text-xs min-w-[700px]">
+      <DataTable
+        title="Declining Stores Detail"
+        subtitle={`${sorted.length} store${sorted.length !== 1 ? 's' : ''} · click column headers to sort`}
+        onExportCsv={handleExportCsv}
+      >
+        <table className="w-full text-xs min-w-[700px]">
             <thead>
               <tr className="border-b border-gray-200 bg-gray-50">
                 {TABLE_COLS.map(({ key, label, align }) => (
@@ -437,8 +456,7 @@ export default function FallenStars({
               })()}
             </tbody>
           </table>
-        </div>
-      </div>
+      </DataTable>
     </div>
   )
 }

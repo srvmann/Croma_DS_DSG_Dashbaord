@@ -15,6 +15,7 @@ import type { FilterState } from '@/hooks/useFilters'
 import { cn } from '@/lib/utils'
 import TargetManagementDrawer from './TargetManagementDrawer'
 import { fmtInr, fmtPct } from '@/lib/formatting'
+import { exportExcel } from '@/lib/tableExport'
 import { kpiContainer, kpiItem, panelSpring } from '@/lib/animations'
 
 const Plot = createPlotlyComponent(Plotly)
@@ -553,6 +554,23 @@ export default function TargetCommandCenter({ filters }: Props) {
     URL.revokeObjectURL(url)
   }, [storeTableData, dayOfMonth, targetMonth])
 
+  const exportXlsx = useCallback(() => {
+    const headers = [
+      'Store ID', 'Store Name', 'State', 'Category',
+      'Target (₹)', 'Current Sales (₹)', 'Achievement %',
+      'Gap (₹)', 'Gap %', 'Req Daily Sales (₹)',
+      'Projected Month-End (₹)', 'Projected %', 'Risk Status',
+    ]
+    const rows = storeTableData.map(r => [
+      r.store.store_id, r.store.store_name ?? '', r.store.state ?? '', r.store.category ?? '',
+      r.target, r.currentSales,
+      r.achPct.toFixed(1) + '%', r.gap, r.gapPct.toFixed(1) + '%',
+      r.reqDRR.toFixed(0), r.projected.toFixed(0),
+      r.projAchPct.toFixed(1) + '%', r.status,
+    ])
+    exportExcel(`target-tracker-day${dayOfMonth}-${targetMonth}`, headers, rows)
+  }, [storeTableData, dayOfMonth, targetMonth])
+
   // DS vs DSG breakdown — must be before guards (hook rule)
   const planSplit = useMemo(() => {
     const dsTotal  = filteredStores.reduce((s, st) => s + (st.monthly_sales_ds?.[targetMonth]  ?? 0), 0)
@@ -1006,7 +1024,14 @@ export default function TargetCommandCenter({ filters }: Props) {
               className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-white border border-gray-200 text-xs text-gray-600 hover:text-gray-900 hover:border-gray-400 shadow-sm transition-colors"
             >
               <Download className="h-3.5 w-3.5" />
-              Export CSV
+              CSV
+            </button>
+            <button
+              onClick={exportXlsx}
+              className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-white border border-emerald-200 text-xs text-emerald-700 hover:text-emerald-900 hover:border-emerald-400 shadow-sm transition-colors"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Excel
             </button>
           </div>
         </div>

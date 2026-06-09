@@ -9,7 +9,7 @@ import {
 import {
   ChevronUp, ChevronDown,
   TrendingUp, TrendingDown,
-  Star, Activity, BarChart2, Zap, ChevronRight, Minus,
+  Star, Activity, BarChart2, Zap, ChevronRight, Minus, Download,
 } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import createPlotlyComponent from 'react-plotly.js/factory'
@@ -20,6 +20,7 @@ import type { FilterState } from '@/hooks/useFilters'
 import { type StoreCategory, CATEGORY_ORDER } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
 import { fmtInr, fmtPct } from '@/lib/formatting'
+import { exportCsv } from '@/lib/tableExport'
 import { kpiContainer, kpiItem, panelSpring } from '@/lib/animations'
 import { PT } from '@/lib/plotlyTheme'
 
@@ -356,6 +357,26 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
         ? <ChevronUp   className="h-3 w-3 text-blue-600" />
         : <ChevronDown className="h-3 w-3 text-blue-600" />
 
+  const handleExportCsv = useCallback(() => {
+    const headers = ['#','Store ID','Store Name','State','Classification','Early Rev','Mid Rev','Recent Rev','Growth %','Early Plans','Mid Plans','Recent Plans']
+    const rows = tableRows.map(({ store, earlyTotal, midTotal, recentTotal, growthPct, category, earlyPlans, midPlans, recentPlans }, i) => [
+      i + 1,
+      store.store_id,
+      store.store_name ?? store.store_id,
+      store.state ?? '',
+      category,
+      earlyTotal,
+      midTotal,
+      recentTotal,
+      growthPct != null ? parseFloat(growthPct.toFixed(2)) : '',
+      earlyPlans,
+      midPlans,
+      recentPlans,
+    ])
+    const suffix = activeCategory ? `-${activeCategory.replace(/\s+/g, '-').toLowerCase()}` : ''
+    exportCsv(`store-journey${suffix}.csv`, headers, rows)
+  }, [tableRows, activeCategory])
+
   const { phases, counts: globalCounts } = classification
   const cardCls  = 'rounded-xl border border-gray-200 bg-white p-4 shadow-sm'
   const emptyMsg = 'flex items-center justify-center h-64 text-gray-400 text-sm'
@@ -643,6 +664,13 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleExportCsv}
+              className="flex items-center gap-1 text-xs text-emerald-700 hover:text-emerald-600 transition-colors px-2 py-1.5 rounded border border-emerald-200 bg-emerald-50 whitespace-nowrap"
+              title="Download CSV"
+            >
+              <Download className="h-3 w-3" /> CSV
+            </button>
             <select
               value={activeCategory ?? ''}
               onChange={e => setActiveCategory((e.target.value as StoreCategory) || null)}
