@@ -8,12 +8,12 @@ export interface StoreRecord {
   store_id: string
   store_name?: string
   state?: string
-  category?: string                          // store tier: A+ / A / B / C / D
-  monthly_sales: Record<string, number>           // DS + DSG combined revenue
-  monthly_sales_ds?: Record<string, number>       // Device Secure only revenue
-  monthly_sales_dsg?: Record<string, number>      // Device Secure Gold only revenue
-  monthly_plans_count?: Record<string, number>    // transaction row count per month (plan count)
-  target?: number | null                     // OOW budget for the target month
+  category?: string
+  monthly_sales: Record<string, number>
+  monthly_sales_ds?: Record<string, number>
+  monthly_sales_dsg?: Record<string, number>
+  monthly_plans_count?: Record<string, number>
+  target?: number | null
   zonal_manager?: string
   cluster_manager?: string
 }
@@ -25,7 +25,7 @@ export interface DashboardData {
   states: string[]
   categories: string[]
   has_targets: boolean
-  target_month?: string | null  // e.g. 'Jun-2026' — the month the target file covers
+  target_month?: string | null
   warnings: string[]
 }
 
@@ -35,6 +35,8 @@ export interface UploadSalesResult {
   ok: boolean
   stores: number
   months: string[]
+  needs_confirm: boolean
+  existing?: SalesFileMeta
 }
 export interface UploadTargetsResult {
   ok: boolean
@@ -44,10 +46,11 @@ export interface UploadTargetsResult {
 export const uploadSales = (
   file: File,
   onProgress?: (pct: number) => void,
+  force = false,
 ) => {
   const form = new FormData()
   form.append('file', file)
-  return api.post<UploadSalesResult>('/api/upload/sales', form, {
+  return api.post<UploadSalesResult>(`/api/upload/sales?force=${force}`, form, {
     onUploadProgress: e =>
       onProgress?.(Math.round((e.loaded * 100) / (e.total ?? 1))),
   })
@@ -68,6 +71,30 @@ export const uploadTargets = (
 export const loadDemoData = () =>
   api.post<UploadSalesResult>('/api/demo/load')
 
+// ── Storage management ────────────────────────────────────────────────────────
+
+export interface SalesFileMeta {
+  filename: string
+  uploaded_at: string
+  file_size_kb: number
+  record_count: number
+}
+
+export interface StorageStatus {
+  has_combined_sales: boolean
+  active_sales_file: string | null
+  active_sales_meta: SalesFileMeta | null
+  active_target_month: string | null
+  target_files: TargetFileRecord[]
+  tracker_sales: TrackerSalesMeta[]
+}
+
+export const getStorageStatus = () =>
+  api.get<StorageStatus>('/api/storage/status')
+
+export const deleteCombinedSales = () =>
+  api.delete<{ ok: boolean }>('/api/storage/sales')
+
 // ── Target management ─────────────────────────────────────────────────────────
 
 export interface TargetFileRecord {
@@ -77,6 +104,7 @@ export interface TargetFileRecord {
   uploaded_at: string
   file_size_kb: number
   status: 'active' | 'inactive' | 'archived'
+  total_target?: number
 }
 
 export const listTargets = () =>
@@ -101,6 +129,88 @@ export const setActiveTarget = (month: string) =>
 
 export const archiveTarget = (month: string) =>
   api.post<TargetFileRecord>('/api/targets/archive', { month })
+
+export const deleteTarget = (month: string) =>
+  api.delete<{ ok: boolean }>(`/api/targets/${encodeURIComponent(month)}`)
+
+// ── Target Tracker ─────────────────────────────────────────────────────────────
+
+export interface TrackerSalesMeta {
+  month: string
+  filename: string
+  file_size_kb: number
+  uploaded_at: string
+}
+
+export interface TrackerSalesUploadResult extends TrackerSalesMeta {
+  already_existed: boolean
+  store_count: number
+  max_elapsed: number
+}
+
+export interface TrackerMonthStatus {
+  month: string
+  has_target: boolean
+  has_sales: boolean
+  is_active_target: boolean
+  target_meta: TargetFileRecord | null
+  sales_meta: TrackerSalesMeta | null
+}
+
+export interface TrackerStatus {
+  active_target_month: string | null
+  months: TrackerMonthStatus[]
+}
+
+export interface TrackerTargetRow {
+  store_key: string
+  store_name: string
+  head_operations: string
+  zonal_manager: string
+  cluster_manager: string
+  target: number
+}
+
+export interface TrackerSalesRow {
+  store_name: string
+  store_key: string
+  sales: number
+  day: number
+  state: string
+}
+
+export interface TrackerData {
+  month: string
+  has_target: boolean
+  has_sales: boolean
+  targets: TrackerTargetRow[]
+  sales_rows: TrackerSalesRow[]
+  max_elapsed: number
+  detected_month: string | null
+}
+
+export const uploadTrackerSales = (
+  file: File,
+  onProgress?: (pct: number) => void,
+) => {
+  const form = new FormData()
+  form.append('file', file)
+  return api.post<TrackerSalesUploadResult>('/api/tracker/sales/upload', form, {
+    onUploadProgress: e =>
+      onProgress?.(Math.round((e.loaded * 100) / (e.total ?? 1))),
+  })
+}
+
+export const getTrackerStatus = () =>
+  api.get<TrackerStatus>('/api/tracker/status')
+
+export const getTrackerData = (month: string) =>
+  api.get<TrackerData>(`/api/tracker/data?month=${encodeURIComponent(month)}`)
+
+export const deleteTrackerSales = (month: string) =>
+  api.delete<{ ok: boolean }>(`/api/tracker/sales/${encodeURIComponent(month)}`)
+
+// ── Generic file-explorer (compatibility) ─────────────────────────────────────
 
 export const uploadFile = (file: File) => {
   const form = new FormData()

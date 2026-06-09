@@ -295,14 +295,14 @@ export default function App() {
         <div className="flex items-center justify-between h-full px-4 max-w-screen-2xl mx-auto gap-4">
           <div className="flex items-center gap-3 min-w-0">
             <span className="shrink-0 inline-flex items-center justify-center px-3 h-8 rounded-full bg-gradient-to-r from-blue-600 to-cyan-400 text-white text-sm font-bold tracking-wide select-none shadow-sm">
-              SW
+              CR
             </span>
             <div className="min-w-0">
               <p className="text-base font-bold text-gray-900 leading-none truncate">
-                StoreWise
+                Croma Analytics
               </p>
-              <p className="text-[10px] text-gray-500 leading-tight mt-0.5">
-                Store Analytics Platform
+              <p className="text-[10px] text-gray-400 leading-tight mt-0.5 tracking-wide">
+                DS · DSG Store Intelligence
               </p>
             </div>
           </div>
@@ -405,7 +405,7 @@ export default function App() {
       {/* ── Footer ── */}
       <footer className="fixed bottom-0 inset-x-0 z-20 h-10 flex items-center justify-center border-t border-gray-200 bg-white/95 backdrop-blur-sm">
         <span className="text-[11px] font-medium tracking-[0.18em] uppercase text-gray-400 select-none">
-          StoreWise · Croma DSG Analytics
+          Croma Analytics · DS &amp; DSG Store Intelligence Platform
         </span>
       </footer>
 

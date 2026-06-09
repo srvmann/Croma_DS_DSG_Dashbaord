@@ -1,24 +1,53 @@
 """
 StoreWise FastAPI backend.
 
-Domain endpoints (StoreWise-specific):
-  POST /api/upload/sales    — upload sales XLSX (fixed path: data/sales.xlsx)
-  POST /api/upload/targets  — upload targets XLSX (fixed path: data/targets.xlsx)
-  GET  /api/data            — merged dashboard payload
-  GET  /api/stores/{id}     — single-store detail
+Sales data policy
+─────────────────
+Main-dashboard sales are held IN MEMORY ONLY.  They are never written to
+disk, and are cleared on every server restart.  The user must re-upload
+a sales file after every browser refresh / server restart.
 
-Generic endpoints (file-explorer, kept for compatibility):
+Target files are persistent (data/targets/).  Users upload them once per
+month; they survive restarts.
+
+Domain endpoints (StoreWise-specific):
+  POST /api/upload/sales         — parse sales XLSX → hold in memory
+  POST /api/upload/targets       — upload targets XLSX → month-keyed storage
+  GET  /api/data                 — merged dashboard payload (in-memory sales)
+  GET  /api/stores/{id}          — single-store detail
+
+Storage management:
+  GET  /api/storage/status       — snapshot of in-memory + persisted state
+  DELETE /api/storage/sales      — clear in-memory sales data
+
+Target management:
+  GET  /api/targets/list         — list all managed target files
+  POST /api/targets/upload       — upload target for a specific month
+  POST /api/targets/set-active   — activate a month's target
+  POST /api/targets/archive      — archive a month's target
+  DELETE /api/targets/{month}    — permanently delete a month's target
+
+Target Tracker:
+  POST /api/tracker/sales/upload — upload tracker sales (month auto-detected)
+  GET  /api/tracker/status       — list stored tracker data
+  GET  /api/tracker/data         — parsed target + sales rows for a month
+  DELETE /api/tracker/sales/{month} — delete tracker sales for a month
+
+Generic (file-explorer, kept for compatibility):
   GET  /api/health
+  POST /api/demo/load
   POST /api/upload
   GET  /api/sheets
   GET  /api/data/{sheet_name}
   GET  /api/analysis/{sheet_name}
 """
 
-import json
+import io
 import logging
 import os
-import shutil
+import tempfile
+from datetime import datetime
+from typing import Any
 
 import pandas as pd
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -34,11 +63,12 @@ from parser import (
     parse_targets,
     validate_store_match,
 )
-import targets_manager as tm
+import storage as st
+import tracker as trk
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="StoreWise API", version="1.0.0")
+app = FastAPI(title="StoreWise API", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -48,17 +78,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+# ── In-memory sales state ──────────────────────────────────────────────────────
+# Main-dashboard sales data lives here only.  None → no data loaded this session.
 
-SALES_FILE = os.path.join(DATA_DIR, "sales.xlsx")
-TARGETS_FILE = os.path.join(DATA_DIR, "targets.xlsx")
-TARGETS_META_FILE = os.path.join(DATA_DIR, "targets_meta.json")
+_in_memory_sales: list[dict] | None = None
+_sales_session_meta: dict[str, Any] | None = None
 
 # Used only by the generic /api/upload → /api/data/{sheet} flow
 _uploaded_file: str | None = None
 
-# Locale-safe month ordering (avoids strptime %b locale issues)
 _MONTH_ORDER = {
     m: i
     for i, m in enumerate(
@@ -68,7 +96,7 @@ _MONTH_ORDER = {
 }
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
 
 def _validate_excel(file: UploadFile) -> None:
@@ -80,13 +108,7 @@ def _validate_excel(file: UploadFile) -> None:
         )
 
 
-def _save(file: UploadFile, dest: str) -> None:
-    with open(dest, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-
-
 def _sort_months(months: list[str]) -> list[str]:
-    """Sort 'MMM-YYYY' strings chronologically, locale-independently."""
     def key(m: str) -> tuple[int, int]:
         parts = m.split("-")
         if len(parts) != 2:
@@ -94,18 +116,43 @@ def _sort_months(months: list[str]) -> list[str]:
         name, year = parts
         return (int(year) if year.isdigit() else 9999,
                 _MONTH_ORDER.get(name.lower(), 99))
-
     return sorted(months, key=key)
 
 
 def _extract_months(stores: list[dict]) -> list[str]:
-    """Pull month keys from the first store record and return them sorted."""
     if not stores:
         return []
     return _sort_months(list(stores[0].get("monthly_sales", {}).keys()))
 
 
-# ── Domain endpoints ──────────────────────────────────────────────────────────
+def _parse_bytes_as_sales(content: bytes) -> list[dict]:
+    """Write bytes to a temp file, parse with parse_sales(), clean up."""
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        return parse_sales(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+
+def _read_active_targets() -> tuple[bool, dict[str, dict], str | None]:
+    """Return (has_targets, targets_dict, active_month) from the active target file on disk."""
+    active_month = st.get_active_target_month()
+    if not active_month:
+        return False, {}, None
+    target_path = st.get_month_target(active_month)
+    if not target_path:
+        return False, {}, active_month
+    try:
+        targets = parse_targets(target_path)
+        return True, targets, active_month
+    except Exception as exc:
+        logger.warning("Could not parse active target file: %s", exc)
+        return False, {}, active_month
+
+
+# ── Health ────────────────────────────────────────────────────────────────────
 
 
 @app.get("/api/health")
@@ -113,17 +160,16 @@ def health():
     return {"status": "ok"}
 
 
+# ── Demo data ─────────────────────────────────────────────────────────────────
+
+
 @app.post("/api/demo/load")
 def load_demo_data():
-    """Generate deterministic demo data and write it to the data directory.
+    """Generate deterministic demo data, hold sales in memory, save target to disk."""
+    global _in_memory_sales, _sales_session_meta
 
-    Returns the same shape as /api/upload/sales so the frontend can
-    treat both responses identically.
-    """
     import random
-
     rng = random.Random(42)
-
     states = [
         "Maharashtra", "Delhi", "Karnataka", "Tamil Nadu",
         "Gujarat", "Rajasthan", "West Bengal", "Telangana",
@@ -153,8 +199,8 @@ def load_demo_data():
 
     for i in range(1, 31):
         state = states[(i - 1) % len(states)]
-        cat = categories[(i - 1) % len(categories)]
-        city = city_map[state][(i - 1) % len(city_map[state])]
+        cat   = categories[(i - 1) % len(categories)]
+        city  = city_map[state][(i - 1) % len(city_map[state])]
         store_id = f"CR{i:03d}"
         base = rng.randint(400_000, 2_000_000)
 
@@ -166,172 +212,208 @@ def load_demo_data():
         }
         for m in months:
             row[m] = round(base * rng.uniform(0.65, 1.40) / 1000) * 1000
-
         sales_rows.append(row)
         target_rows.append({
             "Store_ID":       store_id,
             "Monthly_Target": round(base * 1.10 / 100_000) * 100_000,
         })
 
-    sales_df = pd.DataFrame(sales_rows)
-    sales_df.to_excel(SALES_FILE, index=False)
-
+    sales_df  = pd.DataFrame(sales_rows)
     target_df = pd.DataFrame(target_rows)
-    target_df.to_excel(TARGETS_FILE, index=False)
 
+    # Parse sales into memory
+    buf = io.BytesIO()
+    sales_df.to_excel(buf, index=False)
     try:
-        stores = parse_sales(SALES_FILE)
+        stores = _parse_bytes_as_sales(buf.getvalue())
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    _in_memory_sales = stores
+    _sales_session_meta = {
+        "filename":     "demo_data.xlsx",
+        "uploaded_at":  datetime.now().isoformat(timespec="seconds"),
+        "file_size_kb": round(len(buf.getvalue()) / 1024, 1),
+        "record_count": len(stores),
+    }
+
+    # Save target to disk (targets are persistent)
+    buf2 = io.BytesIO()
+    target_df.to_excel(buf2, index=False)
+    target_month = "Dec-2024"
+    st.save_target_file(buf2.getvalue(), target_month)
+    st.set_active_target(target_month)
+
     return {
-        "ok": True,
+        "ok":     True,
         "stores": len(stores),
         "months": _extract_months(stores),
     }
 
 
-@app.post("/api/upload/sales")
-async def upload_sales(file: UploadFile = File(...)):
-    """Save sales XLSX and return a summary."""
-    _validate_excel(file)
-    _save(file, SALES_FILE)
+# ── Main dashboard upload endpoints ──────────────────────────────────────────
 
+
+@app.post("/api/upload/sales")
+async def upload_sales(
+    file: UploadFile = File(...),
+    force: bool = False,
+):
+    """Parse sales XLSX and hold it in memory.
+
+    Sales data is NEVER written to disk.  It is cleared on server restart.
+
+    If data is already loaded and force=False, returns
+    {'needs_confirm': True, 'existing': <meta>} without replacing.
+    Pass force=True to replace immediately.
+    """
+    global _in_memory_sales, _sales_session_meta
+
+    _validate_excel(file)
+
+    if not force and _in_memory_sales is not None:
+        return {"needs_confirm": True, "existing": _sales_session_meta}
+
+    content = await file.read()
     try:
-        stores = parse_sales(SALES_FILE)
+        stores = _parse_bytes_as_sales(content)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Parse error: {exc}") from exc
 
+    _in_memory_sales = stores
+    _sales_session_meta = {
+        "filename":     file.filename or "upload.xlsx",
+        "uploaded_at":  datetime.now().isoformat(timespec="seconds"),
+        "file_size_kb": round(len(content) / 1024, 1),
+        "record_count": len(stores),
+    }
+
     months = _extract_months(stores)
-    return {"ok": True, "stores": len(stores), "months": months}
+    return {"ok": True, "stores": len(stores), "months": months, "needs_confirm": False}
 
 
 @app.post("/api/upload/targets")
 async def upload_targets(file: UploadFile = File(...)):
-    """Save targets XLSX and return a summary."""
+    """Save targets XLSX (legacy endpoint; month inferred from filename)."""
     _validate_excel(file)
     original_name = file.filename or ""
-    _save(file, TARGETS_FILE)
+    content = await file.read()
 
-    # Persist original filename so we can detect the target month later
     target_month = detect_month_from_filename(original_name)
-    with open(TARGETS_META_FILE, "w") as f:
-        json.dump({"original_filename": original_name, "target_month": target_month}, f)
+    if not target_month:
+        target_month = datetime.now().strftime("%b-%Y")
 
+    st.save_target_file(content, target_month)
+
+    target_path = st.get_month_target(target_month)
     try:
-        targets = parse_targets(TARGETS_FILE)
+        targets = parse_targets(target_path)  # type: ignore[arg-type]
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Parse error: {exc}") from exc
 
     return {"ok": True, "stores": len(targets), "target_month": target_month}
 
 
-def _read_target_month() -> str | None:
-    """Return the stored target month (e.g. 'Jun-2026'), or None if not available."""
-    if not os.path.exists(TARGETS_META_FILE):
-        return None
-    try:
-        with open(TARGETS_META_FILE) as f:
-            return json.load(f).get("target_month")
-    except Exception:
-        return None
+# ── Dashboard data ────────────────────────────────────────────────────────────
 
 
 @app.get("/api/data")
 def get_dashboard_data():
-    """Return the merged dashboard payload.
-
-    If no sales file has been uploaded yet, returns an empty payload with
-    no_data=True so the frontend can show the upload prompt instead of
-    crashing.
-    """
-    if not os.path.exists(SALES_FILE):
+    """Return merged dashboard payload using in-memory sales + persisted targets."""
+    if _in_memory_sales is None:
         return {
-            "no_data": True,
-            "stores": [],
-            "months": [],
-            "states": [],
-            "categories": [],
+            "no_data":     True,
+            "stores":      [],
+            "months":      [],
+            "states":      [],
+            "categories":  [],
             "has_targets": False,
-            "warnings": [],
+            "warnings":    [],
         }
 
-    try:
-        stores = parse_sales(SALES_FILE)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to read sales data: {exc}") from exc
+    stores = [dict(s) for s in _in_memory_sales]
 
-    has_targets = os.path.exists(TARGETS_FILE)
-    targets: dict[str, dict] = {}
+    has_targets, targets, target_month = _read_active_targets()
     warnings: list[str] = []
 
-    if has_targets:
-        try:
-            targets = parse_targets(TARGETS_FILE)
-            # Cross-validate store IDs using raw DataFrames
-            sales_df = pd.read_excel(SALES_FILE)
-            target_df = pd.read_excel(TARGETS_FILE)
-            warnings = validate_store_match(sales_df, target_df)
-        except Exception as exc:
-            logger.warning("Targets file could not be processed: %s", exc)
-            has_targets = False
-
-    # Attach per-store target and metadata from targets file
     for store in stores:
         t = targets.get(store["store_id"], {})
         store["target"]          = t.get("target")
         store["zonal_manager"]   = t.get("zonal_manager", "")
         store["cluster_manager"] = t.get("cluster_manager", "")
-        # Use store name from targets file if sales file didn't provide one
         if not store.get("store_name") and t.get("store_name"):
             store["store_name"] = t["store_name"]
 
-    months = _extract_months(stores)
-    states = sorted({s["state"] for s in stores if s["state"]})
+    months     = _extract_months(stores)
+    states     = sorted({s["state"] for s in stores if s["state"]})
     categories = sorted({s["category"] for s in stores if s["category"]})
-    target_month = _read_target_month() if has_targets else None
 
     return {
-        "no_data": False,
-        "stores": stores,
-        "months": months,
-        "states": states,
-        "categories": categories,
-        "has_targets": has_targets,
+        "no_data":      False,
+        "stores":       stores,
+        "months":       months,
+        "states":       states,
+        "categories":   categories,
+        "has_targets":  has_targets,
         "target_month": target_month,
-        "warnings": warnings,
+        "warnings":     warnings,
     }
 
 
 @app.get("/api/stores/{store_id}")
 def get_store_detail(store_id: str):
-    """Return a single store's full record including all monthly revenue."""
-    if not os.path.exists(SALES_FILE):
+    if _in_memory_sales is None:
         raise HTTPException(status_code=404, detail="No sales data uploaded yet.")
 
-    try:
-        stores = parse_sales(SALES_FILE)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    store = next((s for s in stores if s["store_id"] == store_id), None)
+    store = next((s for s in _in_memory_sales if s["store_id"] == store_id), None)
     if store is None:
         raise HTTPException(status_code=404, detail=f"Store '{store_id}' not found.")
 
-    if os.path.exists(TARGETS_FILE):
-        try:
-            t = parse_targets(TARGETS_FILE).get(store_id, {})
-            store["target"]          = t.get("target")
-            store["zonal_manager"]   = t.get("zonal_manager", "")
-            store["cluster_manager"] = t.get("cluster_manager", "")
-            if not store.get("store_name") and t.get("store_name"):
-                store["store_name"] = t["store_name"]
-        except Exception:
+    store = dict(store)
+
+    active_month = st.get_active_target_month()
+    if active_month:
+        target_path = st.get_month_target(active_month)
+        if target_path:
+            try:
+                t = parse_targets(target_path).get(store_id, {})
+                store["target"]          = t.get("target")
+                store["zonal_manager"]   = t.get("zonal_manager", "")
+                store["cluster_manager"] = t.get("cluster_manager", "")
+                if not store.get("store_name") and t.get("store_name"):
+                    store["store_name"] = t["store_name"]
+            except Exception:
+                store["target"] = None
+        else:
             store["target"] = None
     else:
         store["target"] = None
 
     return store
+
+
+# ── Storage management endpoints ──────────────────────────────────────────────
+
+
+@app.get("/api/storage/status")
+def get_storage_status():
+    """Return a snapshot of in-memory sales state + all persisted files."""
+    base = st.storage_status()
+    base["has_combined_sales"] = _in_memory_sales is not None
+    base["active_sales_file"]  = _sales_session_meta.get("filename") if _sales_session_meta else None
+    base["active_sales_meta"]  = _sales_session_meta
+    return base
+
+
+@app.delete("/api/storage/sales")
+def delete_combined_sales():
+    """Clear the in-memory sales data."""
+    global _in_memory_sales, _sales_session_meta
+    if _in_memory_sales is None:
+        raise HTTPException(status_code=404, detail="No sales data is currently loaded.")
+    _in_memory_sales = None
+    _sales_session_meta = None
+    return {"ok": True}
 
 
 # ── Target management endpoints ───────────────────────────────────────────────
@@ -343,8 +425,7 @@ class MonthBody(BaseModel):
 
 @app.get("/api/targets/list")
 def list_managed_targets():
-    """Return metadata for all managed target files (active, inactive, archived)."""
-    return {"targets": tm.list_targets()}
+    return {"targets": st.list_target_files()}
 
 
 @app.post("/api/targets/upload")
@@ -352,16 +433,30 @@ async def upload_managed_target(
     file: UploadFile = File(...),
     month_label: str = Form(...),
 ):
-    """Upload a targets XLSX for a specific month (e.g. Jul-2025)."""
+    """Upload a targets XLSX for a specific month (MMM-YYYY format)."""
     _validate_excel(file)
-    if not tm.validate_month(month_label):
+    month_label = month_label.strip()
+    if not st.validate_month_label(month_label):
         raise HTTPException(
             status_code=400,
             detail=f"Invalid month format '{month_label}'. Expected MMM-YYYY, e.g. Jul-2025.",
         )
     content = await file.read()
+
+    # Validate target file columns
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
     try:
-        meta = tm.save_target(content, month_label.strip())
+        errors = trk.validate_target_file(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+    if errors:
+        raise HTTPException(status_code=422, detail="; ".join(errors))
+
+    try:
+        meta = st.save_target_file(content, month_label)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return meta
@@ -369,24 +464,165 @@ async def upload_managed_target(
 
 @app.post("/api/targets/set-active")
 def set_active_target(body: MonthBody):
-    """Make a managed month the active target (copies it to data/targets.xlsx)."""
-    if not tm.validate_month(body.month):
+    if not st.validate_month_label(body.month):
         raise HTTPException(status_code=400, detail=f"Invalid month '{body.month}'")
     try:
-        return tm.set_active(body.month.strip())
+        return st.set_active_target(body.month.strip())
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/api/targets/archive")
 def archive_managed_target(body: MonthBody):
-    """Move a target file to the archive folder."""
-    if not tm.validate_month(body.month):
+    if not st.validate_month_label(body.month):
         raise HTTPException(status_code=400, detail=f"Invalid month '{body.month}'")
     try:
-        return tm.archive_target(body.month.strip())
+        return st.archive_target_file(body.month.strip())
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/api/targets/{month}")
+def delete_managed_target(month: str):
+    if not st.validate_month_label(month):
+        raise HTTPException(status_code=400, detail=f"Invalid month '{month}'")
+    try:
+        st.delete_target_file(month)
+        return {"ok": True}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# ── Target Tracker endpoints ──────────────────────────────────────────────────
+
+
+@app.post("/api/tracker/sales/upload")
+async def upload_tracker_sales(file: UploadFile = File(...)):
+    """Upload tracker monthly sales. Month is auto-detected from the Date column."""
+    _validate_excel(file)
+    content = await file.read()
+
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        errors = trk.validate_sales_file(tmp_path)
+        if errors:
+            raise HTTPException(status_code=422, detail="; ".join(errors))
+
+        detected_month = trk.detect_sales_month(tmp_path)
+        if not detected_month:
+            now = datetime.now()
+            MONTH_ABBR = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",
+                          7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
+            detected_month = f"{MONTH_ABBR[now.month]}-{now.year}"
+
+        already_exists = st.tracker_sales_exists(detected_month)
+        parsed = trk.parse_tracker_sales(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+    meta = st.save_tracker_sales(content, detected_month)
+    meta["already_existed"] = already_exists
+    meta["store_count"]     = parsed["store_count"]
+    meta["max_elapsed"]     = parsed["max_elapsed"]
+    return meta
+
+
+@app.get("/api/tracker/status")
+def get_tracker_status():
+    """Return what tracker data is currently stored."""
+    target_files  = st.list_target_files()
+    tracker_sales = st.list_tracker_sales()
+    active_target = st.get_active_target_month()
+
+    months_with_target = {t["month"] for t in target_files}
+    months_with_sales  = {s["month"] for s in tracker_sales}
+    all_months = sorted(
+        months_with_target | months_with_sales,
+        key=lambda m: st._label_sort_key(m),
+        reverse=True,
+    )
+
+    months_data = []
+    for month in all_months:
+        has_t = month in months_with_target
+        has_s = month in months_with_sales
+        t_meta = next((t for t in target_files  if t["month"] == month), None)
+        s_meta = next((s for s in tracker_sales if s["month"] == month), None)
+        months_data.append({
+            "month":            month,
+            "has_target":       has_t,
+            "has_sales":        has_s,
+            "is_active_target": month == active_target,
+            "target_meta":      t_meta,
+            "sales_meta":       s_meta,
+        })
+
+    return {
+        "active_target_month": active_target,
+        "months":              months_data,
+    }
+
+
+@app.get("/api/tracker/data")
+def get_tracker_data(month: str):
+    """Return parsed target + sales data for a month."""
+    if not st.validate_month_label(month):
+        raise HTTPException(status_code=400, detail=f"Invalid month '{month}'")
+
+    target_path = st.get_month_target(month)
+    sales_path  = st.get_month_sales(month)
+
+    if target_path is None:
+        active = st.get_active_target_month()
+        if active:
+            target_path = st.get_month_target(active)
+
+    has_target = target_path is not None
+    has_sales  = sales_path is not None
+
+    targets: list[dict] = []
+    sales_result: dict = {
+        "sales_rows":     [],
+        "detected_month": month,
+        "max_elapsed":    15,
+        "store_count":    0,
+    }
+
+    if has_target:
+        try:
+            targets = trk.parse_tracker_target(target_path)  # type: ignore[arg-type]
+        except Exception as exc:
+            logger.warning("Could not parse target file: %s", exc)
+            has_target = False
+
+    if has_sales:
+        try:
+            sales_result = trk.parse_tracker_sales(sales_path)  # type: ignore[arg-type]
+        except Exception as exc:
+            logger.warning("Could not parse tracker sales file: %s", exc)
+            has_sales = False
+
+    return {
+        "month":          month,
+        "has_target":     has_target,
+        "has_sales":      has_sales,
+        "targets":        targets,
+        "sales_rows":     sales_result["sales_rows"],
+        "max_elapsed":    sales_result["max_elapsed"],
+        "detected_month": sales_result.get("detected_month", month),
+    }
+
+
+@app.delete("/api/tracker/sales/{month}")
+def delete_tracker_sales(month: str):
+    if not st.validate_month_label(month):
+        raise HTTPException(status_code=400, detail=f"Invalid month '{month}'")
+    if not st.tracker_sales_exists(month):
+        raise HTTPException(status_code=404, detail=f"No tracker sales for month '{month}'")
+    st.delete_tracker_sales(month)
+    return {"ok": True}
 
 
 # ── Generic file-explorer endpoints (compatibility) ───────────────────────────
@@ -394,11 +630,11 @@ def archive_managed_target(body: MonthBody):
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """Generic XLSX upload for the sheet-explorer UI."""
     global _uploaded_file
     _validate_excel(file)
-    dest = os.path.join(DATA_DIR, file.filename)  # type: ignore[arg-type]
-    _save(file, dest)
+    dest = os.path.join(st.DATA_DIR, file.filename)  # type: ignore[arg-type]
+    content = await file.read()
+    st.save_file(dest, content)
     _uploaded_file = dest
     return {"filename": file.filename, "sheets": get_sheets(dest)}
 

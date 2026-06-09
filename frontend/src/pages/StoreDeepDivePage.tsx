@@ -116,7 +116,7 @@ export default function StoreDeepDivePage() {
           <div className="h-5 w-px bg-gray-200 shrink-0" />
           <div className="flex items-center gap-3 min-w-0">
             <span className="shrink-0 inline-flex items-center justify-center px-3 h-8 rounded-full bg-gradient-to-r from-blue-600 to-cyan-400 text-white text-sm font-bold tracking-wide select-none shadow-sm">
-              SW
+              CR
             </span>
             <div className="min-w-0">
               <p className="text-base font-bold text-gray-900 leading-none truncate">
@@ -248,7 +248,7 @@ export default function StoreDeepDivePage() {
         style={{ background: 'linear-gradient(90deg, #080f20 0%, #1e3a5f 50%, #080f20 100%)' }}
       >
         <span className="text-[11px] font-medium tracking-[0.18em] uppercase text-gray-500 select-none">
-          StoreWise Analytics Platform
+          Croma Analytics · DS &amp; DSG Store Intelligence Platform
         </span>
       </footer>
 
