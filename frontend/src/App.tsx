@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Database, RotateCcw } from 'lucide-react'
+import { Database, ExternalLink, RotateCcw, Target } from 'lucide-react'
 import { useDataContext } from './contexts/DataContext'
 import { useFilters, type FilterState } from './hooks/useFilters'
 import {
@@ -14,6 +14,7 @@ import {
 import UploadScreen from './components/UploadScreen'
 import { AppSkeleton } from './components/Skeleton'
 import StoreDeepDivePage from './pages/StoreDeepDivePage'
+import TargetTrackerPage from './pages/TargetTrackerPage'
 import ExecutiveOverview from './components/tabs/ExecutiveOverview'
 import MonthlyRevenue from './components/tabs/MonthlyRevenue'
 import StoreJourneyMap from './components/tabs/StoreJourneyMap'
@@ -285,6 +286,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/store/:storeId" element={<StoreDeepDivePage />} />
+      <Route path="/target-tracker" element={<TargetTrackerPage />} />
       <Route path="/*" element={
     <div className="min-h-screen bg-gray-50 text-gray-900">
 
@@ -310,6 +312,14 @@ export default function App() {
               storeCount={stores.length}
               monthCount={months.length}
             />
+            <Link
+              to="/target-tracker"
+              className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-600 hover:border-blue-400 hover:text-blue-600 shadow-sm transition-colors"
+            >
+              <Target className="h-3.5 w-3.5" />
+              Target Tracker
+              <ExternalLink className="h-3 w-3 opacity-50" />
+            </Link>
           </div>
         </div>
       </header>
