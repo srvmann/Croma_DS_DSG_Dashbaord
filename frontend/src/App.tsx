@@ -26,6 +26,7 @@ import RevenueMovers from './components/tabs/RevenueMovers'
 import StoreDeepDive from './components/tabs/StoreDeepDive'
 import TargetCommandCenter from './components/tabs/TargetCommandCenter'
 import StateJourneyAnalysis from './components/tabs/StateJourneyAnalysis'
+import PlatformDocs from './components/tabs/PlatformDocs'
 import { cn } from './lib/utils'
 import type { StoreCategory } from './lib/classificationEngine'
 
@@ -45,6 +46,7 @@ const TABS = [
   { id: 'geo',             label: 'Geo Map'          },
   { id: 'store-deep-dive', label: 'Store Spotlight'  },
   { id: 'target-command',  label: 'Target Tracker'   },
+  { id: 'platform-docs',  label: 'Platform Docs'    },
 ] as const
 
 type TabId = typeof TABS[number]['id']
@@ -405,7 +407,9 @@ export default function App() {
                             ? <StoreDeepDive filters={filters} initialStoreId={deepDiveStoreId} />
                             : activeTab === 'target-command'
                               ? <TargetCommandCenter filters={filters} />
-                              : <TabPlaceholder label={currentTab.label} filters={filters} />
+                              : activeTab === 'platform-docs'
+                                ? <PlatformDocs />
+                                : <TabPlaceholder label={currentTab.label} filters={filters} />
             }
           </motion.div>
         </AnimatePresence>
